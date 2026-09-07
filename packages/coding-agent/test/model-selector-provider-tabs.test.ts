@@ -403,3 +403,37 @@ describe("provider-tab model selector", () => {
 		);
 	});
 });
+
+it("keeps model rows and panel height fixed while the refresh spinner advances and settles", async () => {
+	let pending: Promise<void> | undefined;
+	const { selector } = selectorHarness(undefined, {
+		refreshProvider: async () => {
+			await pending;
+		},
+	});
+	await Bun.sleep(20);
+	const before = new Map([52, 120].map(width => [width, Bun.stripANSI(selector.render(width).join("\n"))]));
+	const gate = Promise.withResolvers<void>();
+	pending = gate.promise;
+	selector.handleInput("\x12");
+	await Bun.sleep(10);
+	const first = Bun.stripANSI(selector.render(120).join("\n"));
+	await Bun.sleep(120);
+	const second = Bun.stripANSI(selector.render(120).join("\n"));
+	try {
+		expect(first).not.toBe(second);
+		for (const [width, idle] of before) {
+			const refreshing = Bun.stripANSI(selector.render(width).join("\n"));
+			expect(refreshing.split("\n").length).toBe(idle.split("\n").length);
+			expect(refreshing.split("\n").findIndex(line => line.includes("GPT-5.6 Sol"))).toBe(
+				idle.split("\n").findIndex(line => line.includes("GPT-5.6 Sol")),
+			);
+		}
+	} finally {
+		gate.resolve();
+	}
+	await Bun.sleep(20);
+	for (const [width, idle] of before) {
+		expect(Bun.stripANSI(selector.render(width).join("\n"))).toBe(idle);
+	}
+});

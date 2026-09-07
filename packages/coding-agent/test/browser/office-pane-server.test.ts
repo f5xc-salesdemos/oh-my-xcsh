@@ -6,7 +6,7 @@
  * with no TLS socket. Covers content-types, the `/` → taskpane.html default, the
  * 404 for unknown paths, and the `sanitizeArchivePath` path-traversal guard.
  */
-import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { afterAll, beforeAll, describe, expect, it, spyOn } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -338,16 +338,18 @@ describe("refusing when no pane bundle is available", () => {
 	 * hold the port. Binding first and 404ing is what made this invisible — Office connects, renders
 	 * "Not Found", and nothing in the log disagrees.
 	 *
-	 * A free high port is used, never the real 8444, so this cannot disturb a pane server someone is
-	 * actually running. It never reaches TLS either: the refusal happens before `resolveBridgeTls`,
-	 * which is what keeps this test hermetic and offline.
+	 * Observe the bind boundary directly so concurrent developer test runs cannot contend for a port.
+	 * The refusal also precedes TLS setup, keeping the test offline.
 	 */
 	it("does not bind a port when there is nothing to serve", async () => {
-		const port = 41_899;
-		await expect(startOfficePaneServer(port, "/definitely/not/a/pane/dir")).rejects.toThrow();
-		// If the failed start had bound the port, this would throw EADDRINUSE.
-		const probe = Bun.serve({ port, hostname: "127.0.0.1", fetch: () => new Response("ok") });
-		expect(probe.port).toBe(port);
-		probe.stop(true);
+		const bind = spyOn(Bun, "serve").mockImplementation(() => {
+			throw new Error("Unexpected socket bind");
+		});
+		try {
+			await expect(startOfficePaneServer(0, "/definitely/not/a/pane/dir")).rejects.toThrow();
+			expect(bind).not.toHaveBeenCalled();
+		} finally {
+			bind.mockRestore();
+		}
 	});
 });

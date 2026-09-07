@@ -29,3 +29,11 @@ A manual conversation choice remains in effect under automatic routing. Entering
 ## Where does LiteLLM fit?
 
 LiteLLM is an optional provider proxy installed or checked with `xcsh setup litellm`. Its base uniform resource locator (URL) and credential belong in the runtime environment. Successful text Responses support does not imply Realtime or audio support; test the exact endpoint your workflow uses.
+
+## How do I test licensed Vertex locally?
+
+`bun run dev` and local coding-agent binary builds load the licensed Vertex OAuth client pair automatically. Explicit `XCSH_VERTEX_OAUTH_CLIENT_ID` and `XCSH_VERTEX_OAUTH_CLIENT_SECRET` build inputs take precedence; supply both together.
+
+For local UAT, the first launch can recover the embedded client pair from an installed official xcsh binary and retain it in `$XDG_CONFIG_HOME/xcsh/vertex-build.json` (default `~/.config/xcsh/vertex-build.json`). The file is outside the checkout, shared by local sessions and worktrees for the same operating-system user, and created with owner-only permissions. Each worktree needs this development/build launcher to load it automatically. Later launches reuse it even if the installed binary changes. `XCSH_VERTEX_OAUTH_CREDENTIALS_FILE` selects another private local file containing `clientId` and `clientSecret` fields.
+
+The source-runtime preload keeps the pair in process memory; local compiled candidates embed it. Do not copy this file or its values into source control, logs, or UAT reports. CI does not read or recover workstation credentials: official release builds continue to receive the pair through GitHub secrets. Unit tests use fixture credentials; the live provider smoke script uses the same local preload as development UAT.

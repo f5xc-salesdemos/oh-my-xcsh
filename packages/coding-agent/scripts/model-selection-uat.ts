@@ -36,16 +36,19 @@ const profile = await mkdtemp(join(tmpdir(), "xcsh-model-uat-"));
 const models = ["uat-cloud-a", "uat-cloud-b", "ollama"];
 let fail = false;
 let empty = false;
+let discoveryDelayMs = 0;
 const server = Bun.serve({
 	hostname: "127.0.0.1",
 	port: 0,
 	async fetch(request) {
 		const url = new URL(request.url);
 		const provider = url.pathname.split("/")[1];
-		if (url.pathname.endsWith("/models"))
+		if (url.pathname.endsWith("/models")) {
+			await Bun.sleep(discoveryDelayMs);
 			return fail
 				? new Response("Controlled outage", { status: 503 })
 				: Response.json({ data: empty ? [] : [{ id: "uat-model" }] });
+		}
 		if (url.pathname.endsWith("/chat/completions")) {
 			const body = (await request.json()) as {
 				model: string;
@@ -162,6 +165,25 @@ async function openPicker() {
 	await command("/model");
 	await wait("open picker", text => text.includes("Models:") && text.includes("Ctrl+R:"));
 }
+async function assertRefreshGeometry(label: string) {
+	const idle = await rendered();
+	const modelLine = idle.split("\n").find(line => /\[[^\]]+\/uat-model\]/.test(line));
+	if (!modelLine) throw new Error("Expected a fixture model before geometry check");
+	const row = idle.split("\n").indexOf(modelLine);
+	discoveryDelayMs = 900;
+	try {
+		await keys("ctrl+r");
+		const first = await wait(`${label} spinner start`, text => text.includes("Refreshing "));
+		const next = await wait(`${label} spinner advances`, text => text.includes("Refreshing ") && text !== first);
+		for (const text of [first, next]) {
+			if (text.split("\n").indexOf(modelLine) !== row) throw new Error(`${label}: refresh moved model row`);
+		}
+		const settled = await wait(`${label} spinner settles`, text => !text.includes("Refreshing "));
+		if (settled !== idle) throw new Error(`${label}: refresh changed established layout`);
+	} finally {
+		discoveryDelayMs = 0;
+	}
+}
 let outcome = "failed";
 let error: string | undefined;
 try {
@@ -198,12 +220,16 @@ try {
 	}
 	await keys("Shift+Tab");
 	if (!values.live) {
+		await Bun.sleep(200);
+		await assertHealthyPicker("geometry ready");
+		await assertRefreshGeometry("normal layout");
 		const split = JSON.parse(
 			await herdr("pane", "split", pane, "--direction", "right", "--ratio", "0.33", "--cwd", root, "--no-focus"),
 		);
 		const sibling = split.result.pane.pane_id as string;
 		try {
 			await wait("narrow navigation", text => text.includes("Ctrl+R:") && text.includes("Enter: choose"));
+			await assertRefreshGeometry("narrow layout");
 		} finally {
 			await herdr("pane", "close", sibling);
 		}

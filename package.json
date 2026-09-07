@@ -10,7 +10,7 @@
 		"install:dev": "bun install && bun --cwd=packages/coding-agent link && bun --cwd=packages/ai link && bun run ensure:dependencies",
 		"check:dependencies": "bun scripts/check-installed-dependencies.ts",
 		"ensure:dependencies": "bun scripts/check-installed-dependencies.ts --repair",
-		"dev": "bun run ensure:dependencies && bun packages/coding-agent/src/cli.ts",
+		"dev": "bun run ensure:dependencies && bun --preload ./scripts/dev-vertex-credentials.ts packages/coding-agent/src/cli.ts",
 		"stats": "bun run ensure:dependencies && bun packages/coding-agent/src/cli.ts stats",
 		"build": "bun run ensure:dependencies && bun run --workspaces --if-present build",
 		"build:native": "bun --cwd=packages/natives run build",

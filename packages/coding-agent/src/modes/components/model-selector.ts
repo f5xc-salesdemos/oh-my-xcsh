@@ -10,6 +10,7 @@ import {
 	TabBar,
 	Text,
 	type TUI,
+	truncateToWidth,
 	visibleWidth,
 } from "@f5-sales-demo/pi-tui";
 import type { ModelRegistry, ProviderDiscoveryState, ProviderDiscoveryStatus } from "../../config/model-registry";
@@ -354,6 +355,77 @@ export class ModelSelectorComponent extends Container {
 	#currentModel: Model | undefined;
 	#providerGroups: ProviderModelGroup[] = [];
 	#refreshingProvider?: string;
+	#spinnerFrame = 0;
+	#spinnerTimer?: ReturnType<typeof setInterval>;
+	#pendingRefreshes = 0;
+	#panelHeight = 0;
+	#panelLayoutKey = "";
+
+	override render(width: number): string[] {
+		const lines = super.render(width);
+		if (this.#isMenuOpen) return lines;
+		const key = `${width}:${this.#getActiveProvider()}:${this.#searchInput.getValue()}`;
+		if (key !== this.#panelLayoutKey) {
+			this.#panelLayoutKey = key;
+			this.#panelHeight = 0;
+		}
+		this.#panelHeight = Math.max(this.#panelHeight, lines.length);
+		// Keep established space when refresh removes rows; navigation may establish a new layout.
+		lines.splice(lines.length - 1, 0, ...Array<string>(this.#panelHeight - lines.length).fill(""));
+		return lines;
+	}
+
+	#stopSpinner(): void {
+		if (this.#spinnerTimer) clearInterval(this.#spinnerTimer);
+		this.#spinnerTimer = undefined;
+	}
+
+	dispose(): void {
+		this.#stopSpinner();
+	}
+
+	#renderProviderStatus(width: number): string[] {
+		if (this.#isMenuOpen) return [];
+		const group = this.#providerGroups[this.#activeTabIndex];
+		// Reserve the same status area for every provider. Updating status never moves the catalog.
+		const rows = Array<string>(1 + Math.max(1, ...this.#providerGroups.map(group => group.providers.length))).fill(
+			"",
+		);
+		if (!group || this.#searchInput.getValue().trim()) return rows;
+		const refreshing = this.#refreshingProvider === group.id;
+		if (refreshing) {
+			const frames = theme.spinnerFrames.length ? theme.spinnerFrames : ["⠋", "⠙", "⠹", "⠸"];
+			rows[0] = theme.fg(
+				"muted",
+				`  ${frames[this.#spinnerFrame % frames.length]} Refreshing ${group.label} model list…`,
+			);
+		} else if (
+			group.providers.some(
+				provider => this.#modelRegistry.getProviderDiscoveryState?.(provider)?.status === "cached",
+			)
+		) {
+			const state = this.#modelRegistry.getProviderDiscoveryState?.(group.id);
+			const age = this.#formatDiscoveryAge(state?.fetchedAt);
+			rows[0] = theme.fg("muted", `  Cached model list${age ? ` from ${age}` : ""}. Ctrl+R to refresh.`);
+		}
+		for (const [index, provider] of group.providers.entries()) {
+			const state = this.#modelRegistry.getProviderDiscoveryState?.(provider);
+			const label = getProviderDisplayName(provider);
+			let message = "";
+			let color: ThemeColor = "muted";
+			if (state?.error) {
+				message = `${label}: ${state.error} · Ctrl+R: retry`;
+				color = "warning";
+			} else if (state?.status === "unauthenticated" || group.discoveryStatus === "unauthenticated") {
+				message = `${label}: authentication required · Ctrl+L: login`;
+				color = "warning";
+			} else if (!state || state.status === "idle") message = `${label}: availability unverified · Ctrl+R: refresh`;
+			else if (state.status === "ok" && state.models.length === 0)
+				message = `${label}: empty catalog · Ctrl+R: refresh`;
+			rows[index + 1] = theme.fg(color, message);
+		}
+		return rows.map(row => truncateToWidth(row, width));
+	}
 
 	#menuRoleActions: MenuRoleAction[] = [];
 
@@ -439,6 +511,9 @@ export class ModelSelectorComponent extends Container {
 		this.addChild(this.#searchInput);
 
 		this.addChild(new Spacer(1));
+
+		// Status has fixed rows and renders independently of the model list.
+		this.addChild({ render: width => this.#renderProviderStatus(width), invalidate() {} });
 
 		// Create list container
 		this.#listContainer = new Container();
@@ -717,6 +792,14 @@ export class ModelSelectorComponent extends Container {
 			return;
 		const selectedSelector = this.#getSelectedItem()?.selector;
 		this.#refreshingProvider = activeGroup.id;
+		this.#pendingRefreshes++;
+		if (!this.#spinnerTimer) {
+			this.#spinnerTimer = setInterval(() => {
+				this.#spinnerFrame++;
+				this.#tui.requestRender();
+			}, 80);
+			this.#spinnerTimer.unref();
+		}
 		this.#updateList();
 		this.#tui.requestRender();
 		const providers = new Set(activeGroup.providers);
@@ -740,6 +823,7 @@ export class ModelSelectorComponent extends Container {
 					: -1;
 			if (refreshedIndex >= 0) this.#selectedIndex = refreshedIndex;
 		} finally {
+			if (--this.#pendingRefreshes === 0) this.#stopSpinner();
 			if (this.#refreshingProvider === activeGroup.id) this.#refreshingProvider = undefined;
 			this.#updateList();
 			this.#tui.requestRender();
@@ -918,76 +1002,6 @@ export class ModelSelectorComponent extends Container {
 		const activeGroup = this.#providerGroups[this.#activeTabIndex];
 		const searching = Boolean(this.#searchInput.getValue().trim());
 		const showProvider = searching || activeGroup?.classification === "local";
-		if (!searching && activeGroup && this.#refreshingProvider === activeGroup.id) {
-			this.#listContainer.addChild(
-				new Text(theme.fg("muted", `  Refreshing ${activeGroup.label} model list…`), 0, 0),
-			);
-			this.#listContainer.addChild(new Spacer(1));
-		} else if (
-			!searching &&
-			activeGroup?.stale &&
-			activeGroup.providers.some(
-				provider => this.#modelRegistry.getProviderDiscoveryState?.(provider)?.status === "cached",
-			)
-		) {
-			const providerState =
-				activeGroup.classification === "authenticated"
-					? this.#modelRegistry.getProviderDiscoveryState(activeGroup.id)
-					: undefined;
-			const age = this.#formatDiscoveryAge(providerState?.fetchedAt);
-			this.#listContainer.addChild(
-				new Text(theme.fg("muted", `  Cached model list${age ? ` from ${age}` : ""}. Ctrl+R to refresh.`), 0, 0),
-			);
-			this.#listContainer.addChild(new Spacer(1));
-		}
-
-		if (!searching && activeGroup && this.#refreshingProvider !== activeGroup.id) {
-			const states = activeGroup.providers.map(provider =>
-				this.#modelRegistry.getProviderDiscoveryState?.(provider),
-			);
-			for (let index = 0; index < states.length; index++) {
-				const state = states[index];
-				const provider = activeGroup.providers[index];
-				if (state?.error)
-					this.#listContainer.addChild(
-						new Text(
-							theme.fg("warning", `${getProviderDisplayName(provider)}: ${state.error} · Ctrl+R: retry`),
-							0,
-							0,
-						),
-					);
-				else if (state?.status === "unauthenticated" || activeGroup.discoveryStatus === "unauthenticated")
-					this.#listContainer.addChild(
-						new Text(
-							theme.fg(
-								"warning",
-								`${getProviderDisplayName(provider)}: authentication required · Ctrl+L: login`,
-							),
-							0,
-							0,
-						),
-					);
-				else if (!state || state.status === "idle")
-					this.#listContainer.addChild(
-						new Text(
-							theme.fg(
-								"muted",
-								`${getProviderDisplayName(provider)}: availability unverified · Ctrl+R: refresh`,
-							),
-							0,
-							0,
-						),
-					);
-				else if (state.status === "ok" && state.models.length === 0)
-					this.#listContainer.addChild(
-						new Text(
-							theme.fg("muted", `${getProviderDisplayName(provider)}: empty catalog · Ctrl+R: refresh`),
-							0,
-							0,
-						),
-					);
-			}
-		}
 
 		// Show visible slice of filtered models
 		let previousGroup: string | undefined;
@@ -1232,6 +1246,7 @@ export class ModelSelectorComponent extends Container {
 		}
 
 		if (matchesKey(keyData, "ctrl+l") && this.#onLogin) {
+			this.#stopSpinner();
 			this.#onLogin();
 			return;
 		}
@@ -1274,6 +1289,7 @@ export class ModelSelectorComponent extends Container {
 
 		// Escape or Ctrl+C - close selector
 		if (getKeybindings().matches(keyData, "tui.select.cancel")) {
+			this.#stopSpinner();
 			this.#onCancelCallback();
 			return;
 		}

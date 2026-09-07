@@ -1,3 +1,4 @@
+import "../../../scripts/dev-vertex-credentials";
 /** Minimal authenticated request checks. Reports no credentials or provider response bodies. */
 import { completeSimple, Effort } from "@f5-sales-demo/pi-ai";
 import { ModelRegistry } from "../src/config/model-registry";

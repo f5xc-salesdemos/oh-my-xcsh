@@ -1436,7 +1436,9 @@
         "packages/coding-agent/src/config/settings-schema.ts",
         "packages/coding-agent/src/services/xcsh-context.ts",
         "packages/coding-agent/src/modes/components/model-selector.ts",
-        "packages/coding-agent/src/modes/controllers/model-selection.ts"
+        "packages/coding-agent/src/modes/controllers/model-selection.ts",
+        "scripts/local-vertex-credentials.ts",
+        "scripts/dev-vertex-credentials.ts"
       ],
       "evidence": [
         "source-authority",
@@ -1491,6 +1493,17 @@
             "candidate-cli",
             "offline-configuration",
             "legacy-enrichment"
+          ],
+          "legacyConceptIds": []
+        },
+        {
+          "text": "How do I test licensed Vertex locally?",
+          "readerQuestion": "How do local UAT builds retain licensed Vertex configuration without committing credentials?",
+          "purpose": "Explain private local build credentials, installed-binary recovery, and CI isolation.",
+          "evidence": [
+            "source-authority",
+            "candidate-cli",
+            "offline-configuration"
           ],
           "legacyConceptIds": []
         }
