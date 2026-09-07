@@ -47,11 +47,13 @@ import type { InteractiveModeContext } from "../../modes/types";
 import { type SessionInfo, SessionManager } from "../../session/session-manager";
 import { FileSessionStorage } from "../../session/session-storage";
 import { isSearchProviderPreference, setPreferredImageProvider, setPreferredSearchProvider } from "../../tools";
-import { copyToClipboard } from "../../utils/clipboard";
+import { applyHyperlinkSetting } from "../../tui/hyperlink";
+import { copyToClipboard, copyToClipboardWithResult } from "../../utils/clipboard";
 import { setSessionTerminalTitle } from "../../utils/title-generator";
 import { AgentDashboard } from "../components/agent-dashboard";
 import { AssistantMessageComponent } from "../components/assistant-message";
 import { presentAuthLink, presentDeviceCode } from "../components/auth-link-presenter";
+import { CopySelectorComponent } from "../components/copy-selector";
 import { ExtensionDashboard } from "../components/extensions";
 import { GutterBlock } from "../components/gutter-block";
 import { HistorySearchComponent } from "../components/history-search";
@@ -113,6 +115,12 @@ class LoginPromptCancelled extends Error {}
 
 export class SelectorController {
 	constructor(private ctx: InteractiveModeContext) {}
+
+	#launchHttpUrl(url: string): Promise<{ ok: true } | { ok: false; error: string }> {
+		if (typeof this.ctx.openHttpUrl === "function") return this.ctx.openHttpUrl(url);
+		this.ctx.openInBrowser(url);
+		return Promise.resolve({ ok: true });
+	}
 
 	#emitPromptSignal(type: "user_prompt_start" | "user_prompt_end", kind: UserPromptKind): void {
 		this.ctx.session.extensionRunner?.emit({ type, kind }).catch(() => {});
@@ -244,6 +252,58 @@ export class SelectorController {
 		});
 	}
 
+	showCopySelector(): void {
+		const tail = this.ctx.session.sessionManager.getMessageBranchTail(600);
+		const loadAllEntries = () =>
+			this.ctx.session.sessionManager
+				.getBranch()
+				.filter(
+					(entry): entry is import("../../session/session-manager").SessionMessageEntry =>
+						entry.type === "message",
+				);
+		let closed = false;
+		let overlay: ReturnType<typeof this.ctx.ui.showOverlay>;
+		const selector = new CopySelectorComponent(tail.entries, {
+			requestRender: () => this.ctx.ui.requestRender(),
+			viewportRows: () => this.ctx.ui.terminal.rows,
+			initialHistoryTruncated: tail.truncated,
+			loadAllEntries,
+			onCancel: () => close(),
+			onPick: async (content, label) => {
+				try {
+					const result = await copyToClipboardWithResult(content);
+					if (!result.ok) {
+						this.ctx.showError(`Clipboard failed: ${result.error}. Press Enter to retry.`);
+						return;
+					}
+					this.ctx.showStatus(`Copied ${label}.`);
+					close();
+				} catch (error) {
+					this.ctx.showError(`Clipboard failed: ${error instanceof Error ? error.message : String(error)}`);
+				}
+			},
+			onOpen: (href, label) => {
+				void this.ctx.openHttpUrl(href).then(result => {
+					if (result.ok) this.ctx.showStatus(`Opened ${label}.`);
+					else this.ctx.showError(`Could not open link: ${result.error}`);
+				});
+			},
+		});
+		const close = () => {
+			if (closed) return;
+			closed = true;
+			selector.dispose();
+			overlay.hide();
+			this.ctx.ui.requestRender();
+		};
+		if (selector.targetCount === 0 && !selector.canLoadEarlier) {
+			this.ctx.showWarning("No transcript content is available to copy.");
+			selector.dispose();
+			return;
+		}
+		overlay = this.ctx.ui.showOverlay(selector, { fullscreen: true, mouseTracking: true });
+	}
+
 	/**
 	 * Show the Extension Control Center dashboard.
 	 * Replaces /status with a unified view of all providers and extensions.
@@ -350,6 +410,13 @@ export class SelectorController {
 
 			case "clearOnShrink":
 				this.ctx.ui.setClearOnShrink(value as boolean);
+				break;
+			case "tui.hyperlinks":
+				applyHyperlinkSetting(value);
+				this.ctx.statusLine.invalidate();
+				this.ctx.chatContainer.invalidate();
+				this.ctx.ui.invalidate();
+				this.ctx.ui.requestRender();
 				break;
 
 			case "autocompleteMaxVisible":
@@ -1344,7 +1411,12 @@ export class SelectorController {
 					this.ctx.chatContainer.addChild(new Text(theme.fg("dim", MANUAL_LOGIN_TIP), 1, 0));
 				}
 				this.ctx.ui.requestRender();
-				if (shouldOpenBrowser) this.ctx.openInBrowser(info.openUrl ?? info.url);
+				if (shouldOpenBrowser) {
+					const launch = this.#launchHttpUrl(info.openUrl ?? info.url);
+					void launch.then(result => {
+						if (!result.ok) this.ctx.showWarning(`Could not open the sign-in page: ${result.error}`);
+					});
+				}
 				endAuthorizationWait ??= this.#beginPromptSignal("input");
 			},
 			onPrompt: async (prompt: OAuthPrompt) => {
@@ -1502,10 +1574,12 @@ export class SelectorController {
 					await authStorage.login("google-vertex", {
 						onAuth: info => {
 							presentAuthLink(this.ctx.chatContainer, info.url);
-							if (isHeadlessTerminal(runtime.environment)) {
-								this.ctx.chatContainer.addChild(new Text(theme.fg("dim", VERTEX_MANUAL_LOGIN_TIP), 1, 0));
-							} else {
-								this.ctx.openInBrowser(info.url);
+							this.ctx.chatContainer.addChild(new Text(theme.fg("dim", VERTEX_MANUAL_LOGIN_TIP), 1, 0));
+							if (!isHeadlessTerminal(runtime.environment)) {
+								const launch = this.#launchHttpUrl(info.url);
+								void launch.then(result => {
+									if (!result.ok) this.ctx.showWarning(`Could not open the sign-in page: ${result.error}`);
+								});
 							}
 							this.ctx.ui.requestRender();
 							endAuthorizationWait ??= this.#beginPromptSignal("input");

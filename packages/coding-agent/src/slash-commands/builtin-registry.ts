@@ -545,11 +545,21 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<BuiltinSlashCommandSpec> = [
 			{ name: "code", description: t("commands.copy.sub.code.description") },
 			{ name: "all", description: t("commands.copy.sub.all.description") },
 			{ name: "cmd", description: t("commands.copy.sub.cmd.description") },
+			{ name: "link", description: t("commands.copy.sub.link.description") },
 		],
 		allowArgs: true,
 		handle: async (command, runtime) => {
 			const sub = command.args.trim().toLowerCase() || undefined;
 			await runtime.ctx.handleCopyCommand(sub);
+			runtime.ctx.editor.setText("");
+		},
+	},
+	{
+		name: "open",
+		description: t("commands.open.description"),
+		allowArgs: true,
+		handle: async (command, runtime) => {
+			await runtime.ctx.handleOpenCommand(command.args);
 			runtime.ctx.editor.setText("");
 		},
 	},

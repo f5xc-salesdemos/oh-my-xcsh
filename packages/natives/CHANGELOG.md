@@ -22,6 +22,10 @@
 
 ### Fixed
 
+- Closed and reopened OSC 8 spans at every physical wrap boundary so links cannot bleed into table
+  padding, borders, adjacent cells, or later rows. Semantically ported from
+  [can1357/oh-my-pi#5887](https://github.com/can1357/oh-my-pi/pull/5887)
+  ([#3758](https://github.com/f5-sales-demo/xcsh/issues/3758)).
 - Built Linux GNU release addons against the GLIBC 2.17 napi-rs cross-toolchain floor and added
   artifact plus Debian 12 installation gates
   ([#3376](https://github.com/f5-sales-demo/xcsh/issues/3376)).

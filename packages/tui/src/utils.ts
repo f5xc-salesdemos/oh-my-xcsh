@@ -24,22 +24,8 @@ export function truncateToWidth(
 	return nativeTruncateToWidth(text, maxWidth, ellipsisKind, pad, getDefaultTabWidth());
 }
 
-const OSC8_RE = /\x1b\]8;;([^\x07]*)\x07/g;
-
-function fixOsc8Boundaries(lines: string[]): string[] {
-	let activeUrl: string | null = null;
-	return lines.map(line => {
-		const prefix = activeUrl !== null ? `\x1b]8;;${activeUrl}\x07` : "";
-		for (const match of line.matchAll(OSC8_RE)) {
-			activeUrl = match[1] === "" ? null : match[1];
-		}
-		const suffix = activeUrl !== null ? `\x1b]8;;\x07` : "";
-		return prefix + line + suffix;
-	});
-}
-
 export function wrapTextWithAnsi(text: string, width: number): string[] {
-	return fixOsc8Boundaries(nativeWrapTextWithAnsi(text, width, getDefaultTabWidth()));
+	return nativeWrapTextWithAnsi(text, width, getDefaultTabWidth());
 }
 
 export function extractSegments(

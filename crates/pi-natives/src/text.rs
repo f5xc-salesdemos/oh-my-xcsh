@@ -20,6 +20,7 @@ const MIN_TAB_WIDTH: u32 = 1;
 const MAX_TAB_WIDTH: u32 = 16;
 pub const DEFAULT_TAB_WIDTH: usize = 3;
 const ESC: u16 = 0x1b;
+const OSC8_CLOSE: [u16; 6] = [ESC, b']' as u16, b'8' as u16, b';' as u16, b';' as u16, 0x07];
 
 #[inline]
 fn clamp_tab_width_for_ops(width: u32) -> usize {
@@ -234,6 +235,40 @@ impl AnsiState {
 	}
 }
 
+#[derive(Default)]
+struct WrapState {
+	sgr: AnsiState,
+	hyperlink: Option<Vec<u16>>,
+}
+
+impl WrapState {
+	#[inline]
+	const fn new() -> Self {
+		Self { sgr: AnsiState::new(), hyperlink: None }
+	}
+
+	#[inline]
+	fn apply_ansi_u16(&mut self, seq: &[u16]) {
+		if is_sgr_u16(seq) {
+			self.sgr.apply_sgr_u16(&seq[2..seq.len() - 1]);
+		} else if let Some(uri) = osc8_uri_u16(seq) {
+			if uri.is_empty() {
+				self.hyperlink = None;
+			} else {
+				self.hyperlink = Some(seq.to_vec());
+			}
+		}
+	}
+
+	#[inline]
+	fn write_restore_u16(&self, out: &mut Vec<u16>) {
+		self.sgr.write_restore_u16(out);
+		if let Some(hyperlink) = &self.hyperlink {
+			out.extend_from_slice(hyperlink);
+		}
+	}
+}
+
 #[inline]
 fn write_color_u16(out: &mut Vec<u16>, color: ColorVal, base: u32, first: &mut bool) {
 	if color == COLOR_NONE {
@@ -364,6 +399,27 @@ fn is_sgr_u16(seq: &[u16]) -> bool {
 	seq.len() >= 3 && seq[1] == b'[' as u16 && *seq.last().unwrap() == b'm' as u16
 }
 
+#[inline]
+fn osc8_uri_u16(seq: &[u16]) -> Option<&[u16]> {
+	if seq.len() < OSC8_CLOSE.len()
+		|| seq[0] != ESC
+		|| seq[1] != b']' as u16
+		|| seq[2] != b'8' as u16
+		|| seq[3] != b';' as u16
+	{
+		return None;
+	}
+	let body_end = if seq.last() == Some(&0x07_u16) {
+		seq.len() - 1
+	} else if seq.ends_with(&[ESC, b'\\' as u16]) {
+		seq.len() - 2
+	} else {
+		return None;
+	};
+	let uri_start = seq[4..body_end].iter().position(|&u| u == b';' as u16)? + 5;
+	Some(&seq[uri_start..body_end])
+}
+
 // ============================================================================
 // Grapheme / Width
 // ============================================================================
@@ -490,43 +546,39 @@ fn visible_width_u16(data: &[u16], tab_width: usize) -> usize {
 // ============================================================================
 
 #[inline]
-fn write_active_codes(state: &AnsiState, out: &mut Vec<u16>) {
-	if !state.is_empty() {
-		state.write_restore_u16(out);
-	}
+fn write_active_codes(state: &WrapState, out: &mut Vec<u16>) {
+	state.write_restore_u16(out);
 }
 
 #[inline]
-fn write_line_end_reset(state: &AnsiState, out: &mut Vec<u16>) {
-	let has_underline = state.attrs & ATTR_UNDERLINE != 0;
-	let has_strike = state.attrs & ATTR_STRIKE != 0;
-	if !has_underline && !has_strike {
-		return;
-	}
-
-	out.extend_from_slice(&[ESC, b'[' as u16]);
-	if has_underline {
-		out.extend_from_slice(&[b'2' as u16, b'4' as u16]);
-		if has_strike {
-			out.push(b';' as u16);
+fn write_line_end_reset(state: &WrapState, out: &mut Vec<u16>) {
+	let has_underline = state.sgr.attrs & ATTR_UNDERLINE != 0;
+	let has_strike = state.sgr.attrs & ATTR_STRIKE != 0;
+	if has_underline || has_strike {
+		out.extend_from_slice(&[ESC, b'[' as u16]);
+		if has_underline {
+			out.extend_from_slice(&[b'2' as u16, b'4' as u16]);
+			if has_strike {
+				out.push(b';' as u16);
+			}
 		}
+		if has_strike {
+			out.extend_from_slice(&[b'2' as u16, b'9' as u16]);
+		}
+		out.push(b'm' as u16);
 	}
-	if has_strike {
-		out.extend_from_slice(&[b'2' as u16, b'9' as u16]);
+	if state.hyperlink.is_some() {
+		out.extend_from_slice(&OSC8_CLOSE);
 	}
-	out.push(b'm' as u16);
 }
 
-fn update_state_from_text(data: &[u16], state: &mut AnsiState) {
+fn update_state_from_text(data: &[u16], state: &mut WrapState) {
 	let mut i = 0usize;
 	while i < data.len() {
 		if data[i] == ESC
 			&& let Some(seq_len) = ansi_seq_len_u16(data, i)
 		{
-			let seq = &data[i..i + seq_len];
-			if is_sgr_u16(seq) {
-				state.apply_sgr_u16(&seq[2..seq_len - 1]);
-			}
+			state.apply_ansi_u16(&data[i..i + seq_len]);
 			i += seq_len;
 			continue;
 		}
@@ -609,7 +661,7 @@ fn break_long_word(
 	word: &[u16],
 	width: usize,
 	tab_width: usize,
-	state: &mut AnsiState,
+	state: &mut WrapState,
 ) -> SmallVec<[Vec<u16>; 4]> {
 	let mut lines = SmallVec::<[Vec<u16>; 4]>::new();
 	let mut current_line = Vec::<u16>::new();
@@ -623,9 +675,7 @@ fn break_long_word(
 		{
 			let seq = &word[i..i + seq_len];
 			current_line.extend_from_slice(seq);
-			if is_sgr_u16(seq) {
-				state.apply_sgr_u16(&seq[2..seq_len - 1]);
-			}
+			state.apply_ansi_u16(seq);
 			i += seq_len;
 			continue;
 		}
@@ -681,14 +731,20 @@ fn wrap_single_line(line: &[u16], width: usize, tab_width: usize) -> SmallVec<[V
 	}
 
 	if visible_width_u16(line, tab_width) <= width {
-		return smallvec![line.to_vec()];
+		let mut only = line.to_vec();
+		let mut state = WrapState::new();
+		update_state_from_text(line, &mut state);
+		if state.hyperlink.is_some() {
+			only.extend_from_slice(&OSC8_CLOSE);
+		}
+		return smallvec![only];
 	}
 
 	let tokens = split_into_tokens_with_ansi(line);
 	let mut wrapped = SmallVec::<[Vec<u16>; 4]>::new();
 	let mut current_line = Vec::<u16>::new();
 	let mut current_width = 0usize;
-	let mut state = AnsiState::new();
+	let mut state = WrapState::new();
 
 	for token in tokens {
 		let token_width = visible_width_u16(&token, tab_width);
@@ -735,6 +791,9 @@ fn wrap_single_line(line: &[u16], width: usize, tab_width: usize) -> SmallVec<[V
 	}
 
 	if !current_line.is_empty() {
+		if state.hyperlink.is_some() {
+			current_line.extend_from_slice(&OSC8_CLOSE);
+		}
 		wrapped.push(current_line);
 	}
 
@@ -759,7 +818,7 @@ fn wrap_text_with_ansi_impl(
 	}
 
 	let mut result = SmallVec::<[Vec<u16>; 4]>::new();
-	let mut state = AnsiState::new();
+	let mut state = WrapState::new();
 	let mut line_start = 0usize;
 
 	for i in 0..=text.len() {
@@ -1451,6 +1510,36 @@ mod tests {
 			let line_text = String::from_utf16_lossy(line);
 			assert!(line_text.contains("38;5;196"));
 			assert!(line_text.contains("48;5;236"));
+		}
+	}
+
+	#[test]
+	fn test_wrap_text_with_ansi_isolates_osc8_on_every_physical_line() {
+		let data = to_u16("\x1b]8;;https://example.test/very-long\x07abcdefghij\x1b]8;;\x07 tail");
+		let lines = wrap_text_with_ansi_impl(&data, 4, DEFAULT_TAB_WIDTH);
+		assert!(lines.len() >= 3);
+		for line in lines.iter().take(3) {
+			let text = String::from_utf16_lossy(line);
+			let opens = text
+				.matches("\x1b]8;;https://example.test/very-long\x07")
+				.count();
+			let closes = text.matches("\x1b]8;;\x07").count();
+			assert_eq!(opens, 1, "missing hyperlink reopen: {text:?}");
+			assert_eq!(closes, 1, "unbalanced hyperlink line: {text:?}");
+		}
+		let tail = String::from_utf16_lossy(lines.last().unwrap());
+		assert!(!tail.contains("https://example.test"), "link leaked into tail: {tail:?}");
+
+		let punctuated = to_u16(
+			"prefix \x1b]8;;https://example.com/very/long/path/that/wraps\x07https://example.com/very/long/path/that/wraps\x1b]8;;\x07 suffix",
+		);
+		for line in wrap_text_with_ansi_impl(&punctuated, 20, DEFAULT_TAB_WIDTH) {
+			let text = String::from_utf16_lossy(&line);
+			let opens = text
+				.matches("\x1b]8;;https://example.com/very/long/path/that/wraps\x07")
+				.count();
+			let closes = text.matches("\x1b]8;;\x07").count();
+			assert_eq!(opens, closes, "unbalanced punctuated hyperlink line: {text:?}");
 		}
 	}
 }

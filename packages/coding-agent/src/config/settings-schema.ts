@@ -475,6 +475,17 @@ export const SETTINGS_SCHEMA = {
 		description:
 			"Maximum height in terminal rows for inline images. Set to 0 to use only the viewport-based limit (60% of terminal height).",
 	},
+	"tui.hyperlinks": {
+		type: "enum",
+		values: ["off", "auto", "always"] as const,
+		default: "auto",
+		ui: {
+			tab: "appearance",
+			label: "Terminal Hyperlinks",
+			description: "Emit clickable terminal links automatically, always, or never",
+			submenu: true,
+		},
+	},
 	// Display rendering
 	"display.tabWidth": {
 		type: "number",

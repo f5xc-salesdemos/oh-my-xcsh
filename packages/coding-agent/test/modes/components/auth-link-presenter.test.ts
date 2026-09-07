@@ -1,5 +1,5 @@
-import { beforeAll, describe, expect, it, vi } from "bun:test";
-import { Container } from "@f5-sales-demo/pi-tui";
+import { afterAll, beforeAll, describe, expect, it, vi } from "bun:test";
+import { Container, setTerminalHyperlinks, TERMINAL } from "@f5-sales-demo/pi-tui";
 import { presentAuthLink, presentDeviceCode } from "../../../src/modes/components/auth-link-presenter";
 import { initTheme } from "../../../src/modes/theme/theme";
 
@@ -8,10 +8,14 @@ const LONG_URL =
 
 const OSC_8_OPEN = /\x1b\]8;;([^\x07]+)\x07/g;
 const OSC_8_CLOSE = /\x1b\]8;;\x07/g;
+const originalHyperlinkCapability = TERMINAL.hyperlinks;
 
 beforeAll(() => {
 	initTheme();
+	setTerminalHyperlinks(true);
 });
+
+afterAll(() => setTerminalHyperlinks(originalHyperlinkCapability));
 
 describe("presentDeviceCode", () => {
 	it("keeps the verification URL and one-time code visible in a narrow terminal", () => {
@@ -65,5 +69,19 @@ describe("presentAuthLink", () => {
 		const visible = Bun.stripANSI(container.render(80).join("\n")).replace(/\s+/g, " ").trim();
 		expect(visible).toContain("Cmd+click to open");
 		expect(visible).not.toContain("Ctrl+click to open");
+	});
+
+	it("falls back to a visible URL when terminal hyperlinks are disabled", () => {
+		setTerminalHyperlinks(false);
+		try {
+			const container = new Container();
+			presentAuthLink(container, LONG_URL, { copy: vi.fn(), platform: "linux" });
+
+			const rendered = container.render(240).join("\n");
+			expect(Bun.stripANSI(rendered)).toContain(LONG_URL);
+			expect(rendered).not.toContain("\x1b]8;;");
+		} finally {
+			setTerminalHyperlinks(true);
+		}
 	});
 });

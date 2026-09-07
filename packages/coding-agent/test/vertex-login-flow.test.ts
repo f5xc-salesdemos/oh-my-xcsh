@@ -103,8 +103,12 @@ describe("corporate Vertex login flow", () => {
 		);
 	});
 
-	it("detects Cloud Shell and display-less terminals as headless", () => {
-		expect(isHeadlessTerminal({ CLOUD_SHELL: "true" })).toBe(true);
-		expect(isHeadlessTerminal({ DISPLAY: ":0" })).toBe(false);
+	it("keeps Cloud Shell and SSH headless while treating local desktop hosts and Herdr as launchable", () => {
+		expect(isHeadlessTerminal({ CLOUD_SHELL: "true" }, "darwin")).toBe(true);
+		expect(isHeadlessTerminal({ SSH_CONNECTION: "a b" }, "darwin")).toBe(true);
+		expect(isHeadlessTerminal({}, "darwin")).toBe(false);
+		expect(isHeadlessTerminal({ HERDR_ENV: "1" }, "darwin")).toBe(false);
+		expect(isHeadlessTerminal({}, "linux")).toBe(true);
+		expect(isHeadlessTerminal({ WAYLAND_DISPLAY: "wayland-0" }, "linux")).toBe(false);
 	});
 });

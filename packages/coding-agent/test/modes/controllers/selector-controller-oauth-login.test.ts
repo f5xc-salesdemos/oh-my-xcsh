@@ -299,10 +299,10 @@ describe("SelectorController Corporate Vertex login", () => {
 		}
 	});
 
-	it.each(["SSH", "Herdr"])("shows a usable OAuth action without opening a browser in %s", async terminal => {
+	it("keeps SSH login manual with a usable recovery action", async () => {
 		const environment = {
-			SSH_CONNECTION: terminal === "SSH" ? "synthetic-client synthetic-server" : "",
-			HERDR_ENV: terminal === "Herdr" ? "1" : "",
+			SSH_CONNECTION: "synthetic-client synthetic-server",
+			HERDR_ENV: "",
 			DISPLAY: ":0",
 			CLOUD_SHELL: "",
 		};
@@ -340,7 +340,7 @@ describe("SelectorController Corporate Vertex login", () => {
 			expect(submitted).toBe(true);
 			expect(receivedCode).toBe("synthetic-code");
 			expect(visible).not.toContain("synthetic-code");
-			expect(addedComponents.flatMap(component => component.render(120)).join("\n")).toContain(LONG_AUTH_URL);
+			expect(addedComponents.flatMap(component => component.render(500)).join("\n")).toContain(LONG_AUTH_URL);
 			expect(visible).not.toContain(LONG_AUTH_URL);
 			expect(openInBrowser).not.toHaveBeenCalled();
 		} finally {
@@ -348,6 +348,46 @@ describe("SelectorController Corporate Vertex login", () => {
 				if (value === undefined) delete process.env[key];
 				else process.env[key] = value;
 			}
+		}
+	});
+
+	it("launches Vertex sign-in for local macOS under Herdr and retains manual recovery", async () => {
+		if (process.platform !== "darwin") return;
+		const previous = { HERDR_ENV: process.env.HERDR_ENV, SSH_CONNECTION: process.env.SSH_CONNECTION };
+		process.env.HERDR_ENV = "1";
+		delete process.env.SSH_CONNECTION;
+		try {
+			const addedComponents: Array<{ render(width: number): string[] }> = [];
+			const manualInput = new OAuthManualInputManager();
+			const openHttpUrl = vi.fn(async () => ({ ok: true as const }));
+			const login = vi.fn(async (_provider, callbacks) => {
+				callbacks.onAuth({ url: LONG_AUTH_URL });
+				const pending = callbacks.onManualCodeInput();
+				manualInput.submit("synthetic-code");
+				await pending;
+				throw new Error("stop after presentation");
+			});
+			const ctx = {
+				session: { modelRegistry: { authStorage: { getApiKey: vi.fn(async () => undefined), login } } },
+				oauthManualInput: manualInput,
+				chatContainer: {
+					addChild: (component: { render(width: number): string[] }) => addedComponents.push(component),
+				},
+				ui: { requestRender: vi.fn() },
+				showStatus: vi.fn(),
+				showError: vi.fn(),
+				showWarning: vi.fn(),
+				openHttpUrl,
+			} as unknown as InteractiveModeContext;
+
+			await new SelectorController(ctx).showOAuthSelector("login", "google-vertex");
+			expect(openHttpUrl).toHaveBeenCalledWith(LONG_AUTH_URL);
+			expect(renderVisible(addedComponents)).toContain("/login <authorization code>");
+		} finally {
+			if (previous.HERDR_ENV === undefined) delete process.env.HERDR_ENV;
+			else process.env.HERDR_ENV = previous.HERDR_ENV;
+			if (previous.SSH_CONNECTION === undefined) delete process.env.SSH_CONNECTION;
+			else process.env.SSH_CONNECTION = previous.SSH_CONNECTION;
 		}
 	});
 });

@@ -16,6 +16,8 @@ security and shared-runtime audit reviewed the divergent line through `b2f25dbfe
 `6d3bc569d16cd7351073eaa767caed51021befbb` on September 6, 2026.
 The third-pass terminal-interaction audit extends the reviewed lineage through
 `a1b254047d12e143b7c6011536e918c6c35c5906`, also frozen on September 6, 2026.
+The fourth-pass hyperlink, login-launch, and transcript-copy audit extends the reviewed lineage
+through `6e48b5ce564aa1d7eff60ffe92748f451385ad7d`, frozen on September 7, 2026.
 Because the repositories no longer share a usable linear history, accepted changes are semantic
 ports with adapted regressions rather than merges or ancestry-based cherry-picks.
 
@@ -31,6 +33,7 @@ The four implementation waves accepted these upstream pull requests:
 | Terminal and platform | #10613, #10997, #10492, #9233, and #7634 | #3724 |
 | TUI and renderer crash containment | #1989, #4497, #4529, #2047, #5837, and #6788 | #3743 |
 | Herdr, signals, and mouse interaction | #7810, #8433, #11054, #4121, #3463, #3402, and #11045 | #3748 |
+| Hyperlinks, login launch, and copy picker | #10196, #10606, #11002, #10922, #11086, #5887, and #6282 | #3758 |
 
 These ports protect provider-bound secrets and compaction boundaries, enforce exact-case
 environment references and complete protocol tails, repair Responses replay and shared MCP
@@ -50,6 +53,18 @@ normal exit, resize, disconnect, and emergency cleanup. Herdr pane identity now 
 multiplexer redraw decisions, while notifications use validated argv-only `herdr notification show`
 delivery with terminal fallback. Interactive and signal exits share one draft-preserving teardown,
 and POSIX Ctrl-Z suspends only the xcsh process with `SIGSTOP`.
+
+The fourth-pass work applies an immutable startup capability snapshot to `off`, `auto`, and
+`always` hyperlink policy; safely renders and physically wraps OSC 8 spans; launches local Vertex
+login through an HTTP(S)-only opener while retaining manual recovery; and projects the bounded copy
+picker directly from xcsh `SessionMessageEntry` history. The semantic ports correspond to upstream
+merge commits `db2f55888b9f500b51010d7958a9cc8712e19f5c`,
+`4d13034f5dc70e93a6dad502ea7313792480760e`,
+`72767b81bd2911ebd650cfd0fdd5f92afc7470a6`,
+`4a56732e45c6b13b01e72aeaab113d0a257df0bd`,
+`43a2913d1ee2e88ceff0851a9ed9d0345f12d8c6`,
+`c081dedd3a696c872fd818f89d2b8c6c81a45b1e`, and
+`d1979782e7851b46451e956a5855d69e7781a5f5`.
 
 | Third-pass candidate | Disposition |
 | --- | --- |

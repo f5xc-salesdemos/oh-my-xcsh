@@ -1,12 +1,12 @@
 import { getOAuthProviders } from "@f5-sales-demo/pi-ai";
 import { Container, getKeybindings, Input, Spacer, Text, type TUI } from "@f5-sales-demo/pi-tui";
 import { theme } from "../../modes/theme/theme";
-import { openPath } from "../../utils/open";
+import { type OpenHttpUrlResult, openHttpUrl } from "../../utils/open";
 import { presentAuthLink } from "./auth-link-presenter";
 import { DynamicBorder } from "./dynamic-border";
 
 interface LoginDialogDependencies {
-	openUrl?: (url: string) => void;
+	openUrl?: (url: string) => undefined | OpenHttpUrlResult | Promise<OpenHttpUrlResult>;
 	presentLink?: typeof presentAuthLink;
 }
 
@@ -88,7 +88,14 @@ export class LoginDialogComponent extends Container {
 		}
 
 		// Open browser (best-effort)
-		(this.dependencies.openUrl ?? openPath)(openUrl ?? url);
+		void Promise.resolve((this.dependencies.openUrl ?? openHttpUrl)(openUrl ?? url)).then(result => {
+			if (result && typeof result === "object" && "ok" in result && !result.ok) {
+				this.#contentContainer.addChild(
+					new Text(theme.fg("error", `Could not open browser: ${result.error}`), 1, 0),
+				);
+				this.#tui.requestRender();
+			}
+		});
 
 		this.#tui.requestRender();
 	}

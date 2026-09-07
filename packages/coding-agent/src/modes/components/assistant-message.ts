@@ -9,7 +9,7 @@ import {
 	TERMINAL,
 	Text,
 } from "@f5-sales-demo/pi-tui";
-import { formatNumber, logger } from "@f5-sales-demo/pi-utils";
+import { formatNumber, getProjectDir, logger } from "@f5-sales-demo/pi-utils";
 import { settings } from "../../config/settings";
 import { hasPendingMermaid, mermaidThemeSignature, prerenderMermaid } from "../../modes/theme/mermaid-cache";
 import { getMarkdownTheme, theme } from "../../modes/theme/theme";
@@ -152,7 +152,11 @@ export class AssistantMessageComponent extends Container {
 				// Assistant text messages with no background - trim the text
 				// Set paddingY=0 to avoid extra spacing before tool executions
 				this.#contentContainer.addChild(
-					new Markdown(content.text.trim(), 0, 0, getMarkdownTheme(), undefined, 2, this.markdownMediaOptions),
+					new Markdown(content.text.trim(), 0, 0, getMarkdownTheme(), undefined, {
+						codeBlockIndent: 2,
+						mediaOptions: this.markdownMediaOptions,
+						linkBasePath: getProjectDir(),
+					}),
 				);
 			} else if (content.type === "thinking" && content.thinking.trim()) {
 				// Add spacing only when another visible assistant content block follows.

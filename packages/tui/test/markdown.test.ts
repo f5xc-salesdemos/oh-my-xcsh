@@ -1,7 +1,8 @@
 import { describe, expect, it } from "bun:test";
 import type { Terminal as XtermTerminalType } from "@xterm/headless";
 import { Chalk } from "chalk";
-import { Markdown, renderInlineMarkdown } from "../src/components/markdown.js";
+import { extractMarkdownLinks, Markdown, renderInlineMarkdown } from "../src/components/markdown.js";
+import { setTerminalHyperlinks, TERMINAL } from "../src/terminal-capabilities.js";
 import { type Component, TUI } from "../src/tui.js";
 import { defaultMarkdownTheme } from "./test-themes.js";
 import { VirtualTerminal } from "./virtual-terminal.js";
@@ -25,6 +26,63 @@ describe("renderInlineMarkdown", () => {
 		const plain = rendered.replace(/\x1b\[[0-9;]*m/g, "");
 
 		expect(plain).toBe("1. Review against a base branch (PR Style)");
+	});
+});
+
+describe("Markdown links", () => {
+	it("uses the configured lexer and keeps link order and duplicates", () => {
+		const links = extractMarkdownLinks(
+			"[first **label**](https://example.test/a) and <https://example.test/b> and [again][ref] and [`code` label](https://example.test/c)\n\n" +
+				"`[code](https://ignored.test)`\n\n![image](https://ignored.test/image)\n\n```md\n[fence](https://ignored.test)\n```\n\n" +
+				"[ref]: https://example.test/a",
+		);
+		expect(links).toEqual([
+			{ text: "first label", href: "https://example.test/a" },
+			{ text: "https://example.test/b", href: "https://example.test/b" },
+			{ text: "again", href: "https://example.test/a" },
+			{ text: "code label", href: "https://example.test/c" },
+		]);
+	});
+
+	it("normalizes ST spans before lexing and emits only safe normalized OSC 8", () => {
+		const original = TERMINAL.hyperlinks;
+		setTerminalHyperlinks(true);
+		try {
+			const rendered = new Markdown(
+				"[safe](https://example.test/a) [bad](javascript:alert(1)) [relative](docs/read%20me.md?q=1#part)",
+				0,
+				0,
+				defaultMarkdownTheme,
+				undefined,
+				{ linkBasePath: "/tmp/session" },
+			)
+				.render(200)
+				.join("\n");
+			expect(rendered).toContain("\x1b]8;;https://example.test/a\x07");
+			expect(rendered).not.toContain("\x1b]8;;javascript:");
+			expect(rendered).toContain("\x1b]8;;file:///tmp/session/docs/read%20me.md?q=1#part\x07");
+			expect(rendered).not.toContain("\x1b]8;;https://example.test/a\x1b\\");
+
+			const stLinkedCode = "\x1b]8;;file:///tmp/example.ts\x1b\\`example.ts`\x1b]8;;\x1b\\";
+			const normalized = new Markdown(stLinkedCode, 0, 0, defaultMarkdownTheme).render(80).join("\n");
+			expect(normalized).toContain("\x1b]8;;file:///tmp/example.ts\x07");
+			expect(normalized.replace(/\x1b\]8;[^\x07\x1b]*(?:\x07|\x1b\\)/gu, "")).toContain("example.ts");
+		} finally {
+			setTerminalHyperlinks(original);
+		}
+	});
+
+	it("rejects control bytes in hyperlink targets", () => {
+		const original = TERMINAL.hyperlinks;
+		setTerminalHyperlinks(true);
+		try {
+			const rendered = new Markdown("[bad](https://example.test/a%00b)", 0, 0, defaultMarkdownTheme)
+				.render(80)
+				.join("\n");
+			expect(rendered).not.toContain("\x1b]8;;");
+		} finally {
+			setTerminalHyperlinks(original);
+		}
 	});
 });
 
@@ -419,6 +477,28 @@ describe("Markdown component", () => {
 			// Lines should not exceed width
 			for (const line of plainLines) {
 				expect(line.length <= 15, `Line exceeds width 15: "${line}" (length: ${line.length})`).toBeTruthy();
+			}
+		});
+
+		it("keeps OSC 8 spans balanced across narrow table rows and adjacent cells", () => {
+			const original = TERMINAL.hyperlinks;
+			setTerminalHyperlinks(true);
+			try {
+				const markdown = new Markdown(
+					"| A | B |\n| --- | --- |\n| [abcdefgh](https://a.test) | plain |\n| next | [ijklmnop](https://b.test) |",
+					0,
+					0,
+					defaultMarkdownTheme,
+				);
+				const lines = markdown.render(18);
+				expect(lines.length).toBeGreaterThan(4);
+				for (const line of lines) {
+					const opens = (line.match(/\x1b\]8;;[^\x07]+\x07/gu) ?? []).length;
+					const closes = (line.match(/\x1b\]8;;\x07/gu) ?? []).length;
+					expect(closes).toBe(opens);
+				}
+			} finally {
+				setTerminalHyperlinks(original);
 			}
 		});
 
@@ -1013,11 +1093,17 @@ bar`,
 		});
 
 		it("should emit OSC 8 hyperlink sequences for bare URLs", () => {
-			const markdown = new Markdown("Visit https://example.com for more", 0, 0, defaultMarkdownTheme);
+			const original = TERMINAL.hyperlinks;
+			setTerminalHyperlinks(true);
+			try {
+				const markdown = new Markdown("Visit https://example.com for more", 0, 0, defaultMarkdownTheme);
 
-			const output = markdown.render(80).join("\n");
-			expect(output.includes("\x1b]8;;https://example.com\x07")).toBeTruthy();
-			expect(output.includes("\x1b]8;;\x07")).toBeTruthy();
+				const output = markdown.render(80).join("\n");
+				expect(output.includes("\x1b]8;;https://example.com/\x07")).toBeTruthy();
+				expect(output.includes("\x1b]8;;\x07")).toBeTruthy();
+			} finally {
+				setTerminalHyperlinks(original);
+			}
 		});
 
 		it("should close and reopen OSC 8 hyperlinks at each wrapped line boundary", () => {

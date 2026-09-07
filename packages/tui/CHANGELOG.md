@@ -6,6 +6,13 @@
 
 ### Fixed
 
+- Added conservative runtime OSC 8 capability control, safe Markdown link extraction and targets,
+  ST normalization, and physical-wrap link isolation. Semantically ported from
+  [can1357/oh-my-pi#10196](https://github.com/can1357/oh-my-pi/pull/10196),
+  [#5887](https://github.com/can1357/oh-my-pi/pull/5887),
+  [#6282](https://github.com/can1357/oh-my-pi/pull/6282), and
+  [#11086](https://github.com/can1357/oh-my-pi/pull/11086)
+  ([#3758](https://github.com/f5-sales-demo/xcsh/issues/3758)).
 - Added shared SGR mouse routing and fullscreen alternate-screen ownership for interactive overlays,
   including horizontal-wheel filtering, Herdr-safe redraw behavior, and idempotent mouse/screen
   restoration. Semantically ported from [can1357/oh-my-pi#3402](https://github.com/can1357/oh-my-pi/pull/3402),

@@ -1,3 +1,5 @@
+import * as path from "node:path";
+import { pathToFileURL } from "node:url";
 import { Marked, type Token, type TokenizerExtension, type Tokens } from "marked";
 import { renderLatex } from "../latex";
 import type { SymbolTheme } from "../symbols";
@@ -147,6 +149,74 @@ const markdownParser = new Marked({ gfm: true, async: false }).use({
 	extensions: [...LATEX_MARKDOWN_EXTENSIONS],
 });
 
+const OSC8_SEQUENCE_RE = /\x1b\]8;[^\x07\x1b]*(?:\x07|\x1b\\)/gu;
+const OSC8_ST_PREFIX_RE = /(\x1b\]8;[^\x07\x1b]*)\x1b\\/gu;
+const UNSAFE_URI_BYTES_RE = /[\x00-\x1f\x7f-\x9f]/u;
+
+function normalizeOsc8Terminators(text: string): string {
+	return text.replace(OSC8_ST_PREFIX_RE, "$1\x07");
+}
+
+function plainInlineTokens(tokens: readonly Token[] | undefined): string {
+	if (!tokens) return "";
+	let result = "";
+	for (const token of tokens) {
+		const nestedTokens = (token as Token & { tokens?: Token[] }).tokens;
+		if (token.type === "image") continue;
+		if (token.type === "codespan") {
+			result += token.text;
+			continue;
+		}
+		if (token.type === "br") {
+			result += " ";
+			continue;
+		}
+		if (token.type === "text" || token.type === "escape") {
+			result += nestedTokens?.length ? plainInlineTokens(nestedTokens) : token.text;
+			continue;
+		}
+		result += plainInlineTokens(nestedTokens);
+	}
+	return result;
+}
+
+/** A hyperlink exactly as the configured Markdown lexer resolves it. */
+export interface MarkdownLink {
+	text: string;
+	href: string;
+}
+
+/** Extract rendered links in document order, retaining duplicates and excluding code and images. */
+export function extractMarkdownLinks(text: string): MarkdownLink[] {
+	const links: MarkdownLink[] = [];
+	const walk = (tokens: readonly Token[] | undefined): void => {
+		if (!tokens) return;
+		for (const token of tokens) {
+			if (token.type === "code" || token.type === "codespan" || token.type === "image") continue;
+			if (token.type === "link") {
+				const link = token as Tokens.Link;
+				if (typeof link.href === "string" && link.href.length > 0) {
+					const label = plainInlineTokens(link.tokens).replace(/\s+/gu, " ").trim();
+					links.push({ text: label || link.href, href: link.href });
+				}
+				continue;
+			}
+			const nested = token as unknown as {
+				tokens?: Token[];
+				items?: Array<{ tokens?: Token[] }>;
+				header?: Array<{ tokens?: Token[] }>;
+				rows?: Array<Array<{ tokens?: Token[] }>>;
+			};
+			walk(nested.tokens);
+			if (nested.items) for (const item of nested.items) walk(item.tokens);
+			if (nested.header) for (const cell of nested.header) walk(cell.tokens);
+			if (nested.rows) for (const row of nested.rows) for (const cell of row) walk(cell.tokens);
+		}
+	};
+	walk(markdownParser.lexer(normalizeOsc8Terminators(text)));
+	return links;
+}
+
 /**
  * Default text styling for markdown content.
  * Applied to all text unless overridden by markdown formatting.
@@ -172,6 +242,8 @@ export interface MarkdownOptions {
 	codeBlockIndent?: number;
 	/** Resolve and render Markdown image tokens. */
 	mediaOptions?: MarkdownMediaOptions;
+	/** Session cwd used to turn relative Markdown paths into lexical file:// targets. */
+	linkBasePath?: string;
 }
 
 /** Default text styling for markdown content. */
@@ -243,17 +315,44 @@ function isImageToken(token: Token): token is Tokens.Image {
 	);
 }
 
-function formatHyperlink(text: string, target: string): string {
+function safeHyperlinkTarget(target: string, linkBasePath?: string): string | undefined {
+	if (!target || UNSAFE_URI_BYTES_RE.test(target)) return undefined;
+	try {
+		if (UNSAFE_URI_BYTES_RE.test(decodeURIComponent(target))) return undefined;
+	} catch {
+		return undefined;
+	}
+	try {
+		const absolute = new URL(target);
+		return absolute.protocol === "http:" || absolute.protocol === "https:" || absolute.protocol === "file:"
+			? absolute.href
+			: undefined;
+	} catch {
+		if (!linkBasePath || /^(?:#|\?|\/\/)/u.test(target)) return undefined;
+		const suffixIndex = target.search(/[?#]/u);
+		const rawPath = suffixIndex < 0 ? target : target.slice(0, suffixIndex);
+		const suffix = suffixIndex < 0 ? "" : target.slice(suffixIndex);
+		if (!rawPath) return undefined;
+		try {
+			return `${pathToFileURL(path.resolve(linkBasePath, decodeURIComponent(rawPath))).href}${suffix}`;
+		} catch {
+			return undefined;
+		}
+	}
+}
+
+function formatHyperlink(text: string, target: string, linkBasePath?: string): string {
 	if (!TERMINAL.hyperlinks || !target) {
 		return text;
 	}
 
-	const safeTarget = target.replaceAll("\x1b", "").replaceAll("\x07", "");
+	const safeTarget = safeHyperlinkTarget(target, linkBasePath);
 	if (!safeTarget) {
 		return text;
 	}
 
-	return `\x1b]8;;${safeTarget}\x07${text}\x1b]8;;\x07`;
+	const safeLabel = text.replace(OSC8_SEQUENCE_RE, "");
+	return `\x1b]8;;${safeTarget}\x07${safeLabel}\x1b]8;;\x07`;
 }
 
 export class Markdown implements Component {
@@ -267,6 +366,7 @@ export class Markdown implements Component {
 	#codeBlockIndent: number;
 	#mediaOptions?: MarkdownMediaOptions;
 	#renderLatex: boolean;
+	#linkBasePath?: string;
 	#mediaCache = new Map<
 		string,
 		{ status: "pending" } | { status: "loaded"; media: ResolvedMarkdownMedia } | { status: "error"; message: string }
@@ -318,6 +418,7 @@ export class Markdown implements Component {
 		this.#codeBlockIndent = Math.max(0, Math.floor(options.codeBlockIndent ?? 2));
 		this.#mediaOptions = options.mediaOptions;
 		this.#renderLatex = options.renderLatex !== false;
+		this.#linkBasePath = options.linkBasePath;
 	}
 
 	setText(text: string): void {
@@ -351,7 +452,7 @@ export class Markdown implements Component {
 		}
 
 		// Replace tabs with 3 spaces for consistent rendering
-		const normalizedText = replaceTabs(this.#text);
+		const normalizedText = normalizeOsc8Terminators(replaceTabs(this.#text));
 
 		// Parse markdown to HTML-like tokens
 		const tokens = markdownParser.lexer(normalizedText);
@@ -820,7 +921,7 @@ export class Markdown implements Component {
 				case "link": {
 					const linkText = this.#renderInlineTokens(token.tokens || [], resolvedStyleContext);
 					const styledLinkText = this.#theme.link(this.#theme.underline(linkText));
-					const clickableLinkText = formatHyperlink(styledLinkText, token.href);
+					const clickableLinkText = formatHyperlink(styledLinkText, token.href, this.#linkBasePath);
 					// If link text matches href, only show the link once
 					// Compare raw text (token.text) not styled text (linkText) since linkText has ANSI codes
 					// For mailto: links, strip the prefix before comparing (autolinked emails have
@@ -830,7 +931,8 @@ export class Markdown implements Component {
 						result += clickableLinkText + stylePrefix;
 					else {
 						const styledLinkUrl = this.#theme.linkUrl(` (${token.href})`);
-						result += clickableLinkText + formatHyperlink(styledLinkUrl, token.href) + stylePrefix;
+						result +=
+							clickableLinkText + formatHyperlink(styledLinkUrl, token.href, this.#linkBasePath) + stylePrefix;
 					}
 					break;
 				}

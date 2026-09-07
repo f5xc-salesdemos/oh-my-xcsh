@@ -50,4 +50,19 @@ describe("LoginDialogComponent", () => {
 		expect(copy).toHaveBeenCalledWith(displayedUrl);
 		expect(openUrl).toHaveBeenCalledWith(automaticUrl);
 	});
+
+	it("keeps recovery instructions visible when browser launch fails", async () => {
+		const requestRender = vi.fn();
+		const dialog = new LoginDialogComponent({ requestRender } as never, "synthetic-provider", vi.fn(), {
+			openUrl: vi.fn(async () => ({ ok: false as const, error: "launcher unavailable" })),
+			presentLink: (container, url) => presentAuthLink(container, url, { copy: vi.fn(), platform: "linux" }),
+		});
+		dialog.showAuth(LONG_AUTH_URL, "Paste the authorization code manually.");
+		await Bun.sleep(0);
+		const visible = Bun.stripANSI(dialog.render(200).join("\n"));
+		expect(visible).toContain("Open sign-in page");
+		expect(visible).toContain("Paste the authorization code manually.");
+		expect(visible).toContain("Could not open browser: launcher unavailable");
+		expect(requestRender).toHaveBeenCalled();
+	});
 });

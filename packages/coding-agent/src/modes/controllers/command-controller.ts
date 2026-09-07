@@ -26,6 +26,7 @@ import { controlMediaPlayback, type MediaPlaybackAction } from "../../modes/comp
 import { PythonExecutionComponent } from "../../modes/components/python-execution";
 import { getMarkdownTheme, getSymbolTheme, theme } from "../../modes/theme/theme";
 import type { InteractiveModeContext } from "../../modes/types";
+import { extractLastLink } from "../../modes/utils/copy-targets";
 import { buildHotkeysMarkdown } from "../../modes/utils/hotkeys-markdown";
 import { buildToolsMarkdown } from "../../modes/utils/tools-markdown";
 import type { AsyncJobSnapshotItem } from "../../session/agent-session";
@@ -35,7 +36,7 @@ import { resolveToCwd, stripOuterDoubleQuotes } from "../../tools/path-utils";
 import { replaceTabs } from "../../tools/render-utils";
 import { getChangelogPath, parseChangelog } from "../../utils/changelog";
 import { copyToClipboard } from "../../utils/clipboard";
-import { openPath } from "../../utils/open";
+import { type OpenHttpUrlResult, openHttpUrl, openPath } from "../../utils/open";
 import { setSessionTerminalTitle } from "../../utils/title-generator";
 
 function showMarkdownPanel(ctx: InteractiveModeContext, title: string, markdown: string): void {
@@ -53,6 +54,10 @@ export class CommandController {
 
 	openInBrowser(urlOrPath: string): void {
 		openPath(urlOrPath);
+	}
+
+	openHttpUrl(url: string): Promise<OpenHttpUrlResult> {
+		return openHttpUrl(url);
 	}
 
 	async handleExportCommand(text: string): Promise<void> {
@@ -264,12 +269,39 @@ export class CommandController {
 				return this.#copyAllCode();
 			case "cmd":
 				return this.#copyLastCommand();
+			case "link":
+				return this.#copyLastLink();
 			case "last":
-			case undefined:
 				return this.#copyLastMessage();
+			case undefined:
+				return this.ctx.showCopySelector();
 			default:
 				this.ctx.showError(t("controller.copy.errors.unknownSub", { sub: sub! }));
 		}
+	}
+
+	#copyLastLink(): void {
+		const link = extractLastLink(this.ctx.session.messages);
+		if (!link) {
+			this.ctx.showWarning(t("controller.copy.warnings.noLink"));
+			return;
+		}
+		this.#doCopy(link, t("controller.copy.status.link"));
+	}
+
+	async handleOpenCommand(args?: string): Promise<void> {
+		if (args?.trim()) {
+			this.ctx.showError(t("controller.open.usage"));
+			return;
+		}
+		const link = extractLastLink(this.ctx.session.messages);
+		if (!link) {
+			this.ctx.showWarning(t("controller.copy.warnings.noLink"));
+			return;
+		}
+		const result = await this.openHttpUrl(link);
+		if (!result.ok) this.ctx.showError(t("controller.open.failed", { message: result.error }));
+		else this.ctx.showStatus(t("controller.open.status"));
 	}
 
 	#copyLastMessage() {

@@ -41,6 +41,7 @@
 		"pretest": "bun ../../scripts/check-installed-dependencies.ts",
 		"test": "bun run generate-build-info && bun scripts/bun-test-guarded.ts --max-concurrency 1",
 		"bench:routing-matrix": "bun scripts/bench-routing-matrix.ts",
+		"bench:copy-selector": "bun scripts/bench-copy-selector.ts",
 		"fix": "biome check --write --unsafe . && bun run format-prompts && bun run generate-docs-index && bun run generate-api-spec-index && bun run generate-build-info",
 		"fmt": "biome format --write . && bun run format-prompts",
 		"format-prompts": "bun scripts/format-prompts.ts",

@@ -1,10 +1,10 @@
 import * as os from "node:os";
 import * as path from "node:path";
 import { ThinkingLevel } from "@f5-sales-demo/pi-agent-core";
-import { TERMINAL } from "@f5-sales-demo/pi-tui";
 import { formatDuration, formatNumber, relativePathWithinRoot } from "@f5-sales-demo/pi-utils";
 import { theme } from "../../../modes/theme/theme";
 import { shortenPath } from "../../../tools/render-utils";
+import { urlHyperlink } from "../../../tui/hyperlink";
 import { getSessionAccentAnsi, getSessionAccentHex } from "../../../utils/session-color";
 import { sanitizeStatusText } from "../../shared";
 import { getContextGradientColors } from "./context-gradient";
@@ -206,7 +206,7 @@ const prSegment: StatusLineSegment = {
 		if (!pr) return { content: "", visible: false };
 
 		const label = withIcon(theme.icon.pr, `#${pr.number}`);
-		const content = TERMINAL.hyperlinks ? `\x1b]8;;${pr.url}\x07${label}\x1b]8;;\x07` : label;
+		const content = urlHyperlink(pr.url, label);
 		return { content: theme.fg("contentAccent", content), visible: true };
 	},
 };

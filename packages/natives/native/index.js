@@ -7,7 +7,7 @@ const fs = require("node:fs");
 const { createRequire } = require("node:module");
 const os = require("node:os");
 const path = require("node:path");
-const { getInstalledNativeCandidates, loadInstalledBeforeFallback } = require("./installed-paths");
+const { getInstalledNativeCandidates, loadInstalledBeforeFallback, tryLoadCandidates } = require("./installed-paths");
 
 function getNativesDir() {
 	const xdgDataHome = process.env.XDG_DATA_HOME;
@@ -235,17 +235,14 @@ function loadNative() {
 	const onError = (candidate, err) => {
 		if (process.env.PI_DEV) console.error("Error loading native addon from %s:", candidate, err);
 	};
-	const loaded = loadInstalledBeforeFallback(
-		installedCandidates,
-		require_,
-		errors,
-		() => {
-			const embeddedCandidate = maybeExtractEmbeddedAddon(errors);
-			return embeddedCandidate ? [embeddedCandidate, ...dedupedCandidates] : dedupedCandidates;
-		},
-		onLoaded,
-		onError,
-	);
+	const fallbackCandidates = () => {
+		const embeddedCandidate = maybeExtractEmbeddedAddon(errors);
+		return embeddedCandidate ? [embeddedCandidate, ...dedupedCandidates] : dedupedCandidates;
+	};
+	const loaded = isCompiledBinary
+		? loadInstalledBeforeFallback(installedCandidates, require_, errors, fallbackCandidates, onLoaded, onError)
+		: tryLoadCandidates(fallbackCandidates(), require_, errors, onLoaded, onError) ||
+			tryLoadCandidates(installedCandidates, require_, errors, onLoaded, onError);
 	if (loaded) return loaded;
 	// Check if this is an unsupported platform
 	if (!SUPPORTED_PLATFORMS.includes(platformTag)) {

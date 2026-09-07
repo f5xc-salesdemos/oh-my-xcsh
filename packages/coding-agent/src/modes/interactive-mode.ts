@@ -36,8 +36,10 @@ import type { SessionContext, SessionManager } from "../session/session-manager"
 import { profileMark } from "../startup-profile";
 import { STTController, type SttState } from "../stt";
 import type { ExitPlanModeDetails } from "../tools";
+import { applyHyperlinkSetting } from "../tui/hyperlink";
 import type { EventBus } from "../utils/event-bus";
 import { getEditorCommand, openInEditor } from "../utils/external-editor";
+import type { OpenHttpUrlResult } from "../utils/open";
 import { popTerminalTitle, pushTerminalTitle, setSessionTerminalTitle } from "../utils/title-generator";
 import type { AssistantMessageComponent } from "./components/assistant-message";
 import type { BashExecutionComponent } from "./components/bash-execution";
@@ -218,6 +220,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 
 		this.ui = new TUI(new ProcessTerminal(), settings.get("showHardwareCursor"));
+		applyHyperlinkSetting();
 		this.ui.setClearOnShrink(settings.get("clearOnShrink"));
 		setMermaidRenderCallback(() => this.ui.requestRender());
 		this.chatContainer = new DisposableContainer();
@@ -1236,6 +1239,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		return this.#commandController.handleCopyCommand(sub);
 	}
 
+	handleOpenCommand(args?: string): Promise<void> {
+		return this.#commandController.handleOpenCommand(args);
+	}
+
 	handleMediaCommand(text: string): void {
 		this.#commandController.handleMediaCommand(text);
 	}
@@ -1425,9 +1432,17 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#commandController.openInBrowser(urlOrPath);
 	}
 
+	openHttpUrl(url: string): Promise<OpenHttpUrlResult> {
+		return this.#commandController.openHttpUrl(url);
+	}
+
 	// Selector handling
 	showSettingsSelector(): void {
 		this.#selectorController.showSettingsSelector();
+	}
+
+	showCopySelector(): void {
+		this.#selectorController.showCopySelector();
 	}
 
 	showHistorySearch(): void {

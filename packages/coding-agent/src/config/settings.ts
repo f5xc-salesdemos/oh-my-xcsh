@@ -34,6 +34,7 @@ import {
 	setSymbolPreset,
 } from "../modes/theme/theme";
 import { AgentStorage } from "../session/agent-storage";
+import { applyHyperlinkSetting } from "../tui/hyperlink";
 import { type EditMode, normalizeEditMode } from "../utils/edit-mode";
 import { hardenAgentConfigFile, writeAgentConfigFile } from "./agent-config-file";
 import { withFileLock } from "./file-lock";
@@ -711,6 +712,9 @@ const SETTING_HOOKS: Partial<Record<SettingPath, SettingHook<any>>> = {
 		if (typeof value === "number") {
 			setDefaultTabWidth(value);
 		}
+	},
+	"tui.hyperlinks": value => {
+		applyHyperlinkSetting(value);
 	},
 };
 
