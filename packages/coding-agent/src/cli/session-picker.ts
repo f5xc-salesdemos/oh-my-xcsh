@@ -39,13 +39,14 @@ export async function selectSession(sessions: SessionInfo[]): Promise<string | n
 				await storage.deleteSessionWithArtifacts(session.path);
 				return true;
 			},
+			{ fillHeight: true, getTerminalRows: () => ui.terminal.rows },
 		);
 		return selector;
 	};
 
 	const selector = showSelector();
 	selector.setOnRequestRender(() => ui.requestRender());
-	ui.addChild(selector);
+	ui.showOverlay(selector, { fullscreen: true, anchor: "top-left", width: "100%", maxHeight: "100%", margin: 0 });
 	ui.setFocus(selector);
 	ui.start();
 	return promise;

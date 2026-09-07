@@ -462,17 +462,27 @@ export class InputController {
 	}
 
 	handleCtrlZ(): void {
-		// Set up handler to restore TUI when resumed
-		process.once("SIGCONT", () => {
+		if (process.platform === "win32") {
+			this.ctx.showStatus("Suspend (Ctrl+Z) is not supported on this platform");
+			return;
+		}
+		const onResume = (): void => {
 			this.ctx.ui.start();
 			this.ctx.ui.requestRender(true);
-		});
+		};
+		process.once("SIGCONT", onResume);
 
-		// Stop the TUI (restore terminal to normal mode)
 		this.ctx.ui.stop();
-
-		// Send SIGTSTP to process group (pid=0 means all processes in group)
-		process.kill(0, "SIGTSTP");
+		try {
+			// SIGSTOP cannot be caught by brush/tokio's SIGTSTP listener. Targeting
+			// self also leaves persistent child transports alive across suspension.
+			process.kill(process.pid, "SIGSTOP");
+		} catch (error) {
+			process.removeListener("SIGCONT", onResume);
+			this.ctx.ui.start();
+			this.ctx.ui.requestRender(true);
+			this.ctx.showError(`Failed to suspend: ${error instanceof Error ? error.message : String(error)}`);
+		}
 	}
 
 	handleDequeue(): void {

@@ -62,6 +62,7 @@ import { SelectorController } from "./controllers/selector-controller";
 import { SSHCommandController } from "./controllers/ssh-command-controller";
 import { OAuthManualInputManager } from "./oauth-manual-input";
 import { SessionObserverRegistry } from "./session-observer-registry";
+import { createSessionTeardown, type SessionTeardown } from "./session-teardown";
 import { setMermaidRenderCallback } from "./theme/mermaid-cache";
 import type { Theme } from "./theme/theme";
 import {
@@ -161,6 +162,7 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	#pendingSlashCommands: SlashCommand[] = [];
 	#cleanupUnsubscribe?: () => void;
+	#signalTeardown?: SessionTeardown;
 	readonly #version: string;
 	#planModePreviousTools: string[] | undefined;
 	#planModePreviousModelState: { model: Model; thinkingLevel?: ThinkingLevel } | undefined;
@@ -297,8 +299,13 @@ export class InteractiveMode implements InteractiveModeContext {
 		logger.time("InteractiveMode.init:keybindings");
 		this.keybindings = KeybindingsManager.create();
 
-		// Register session manager flush for signal handlers (SIGINT, SIGTERM, SIGHUP)
-		this.#cleanupUnsubscribe = postmortem.register("session-manager-flush", () => this.sessionManager.flush());
+		this.#signalTeardown = createSessionTeardown({
+			getDraftText: () => this.editor.getText(),
+			beginDispose: () => this.session.beginDispose(),
+			saveDraft: text => this.sessionManager.saveDraft(text),
+			disposeSession: () => this.session.dispose(),
+		});
+		this.#cleanupUnsubscribe = postmortem.register("session-teardown", () => this.#signalTeardown!());
 
 		await logger.time(
 			"InteractiveMode.init:slashCommands",
@@ -368,6 +375,15 @@ export class InteractiveMode implements InteractiveModeContext {
 		// Load initial todos
 		await this.#loadTodoList();
 		profileMark("init: loadTodoList done");
+
+		if (this.editor.getText().length === 0) {
+			try {
+				const draft = await this.sessionManager.consumeDraft();
+				if (draft && this.editor.getText().length === 0) this.editor.setText(draft);
+			} catch (error) {
+				logger.warn("Failed to restore session draft", { error: String(error) });
+			}
+		}
 
 		// Start the UI
 		const clearScreen = settings.get("startup.clearScreen");
@@ -1027,12 +1043,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (this.#isShuttingDown) return;
 		this.#isShuttingDown = true;
 
-		// Flush pending session writes before shutdown
-		await this.sessionManager.flush();
 		this.#btwController.dispose();
 
-		// Emit shutdown event to hooks
-		await this.session.dispose();
+		await (this.#signalTeardown?.() ?? this.session.dispose());
 
 		if (this.isInitialized) {
 			this.ui.requestRender();

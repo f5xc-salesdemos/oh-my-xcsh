@@ -5,14 +5,18 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { $flag, getDebugLogPath } from "@f5-sales-demo/pi-utils";
 import { isKeyRelease, matchesKey } from "./keys";
-import type { Terminal } from "./terminal";
+import { type MouseRoutable, routeSgrMouseInput } from "./mouse";
+import { setAlternateScreenActive, type Terminal } from "./terminal";
 import { ImageProtocol, setCellDimensions, setTerminalImageProtocol, TERMINAL } from "./terminal-capabilities";
+import { isInsideTerminalMultiplexer } from "./terminal-multiplexer";
 import { extractSegments, sliceByColumn, sliceWithWidth, visibleWidth } from "./utils";
 
 const SEGMENT_RESET = "\x1b[0m";
 const LINE_FIT_MIN_SOURCE_CODE_UNITS = 4096;
 const LINE_FIT_MAX_SOURCE_CODE_UNITS = 65_536;
 const LINE_FIT_SOURCE_WIDTH_MULTIPLIER = 64;
+const MOUSE_TRACKING_ON = "\x1b[?1000h\x1b[?1003h\x1b[?1006h";
+const MOUSE_TRACKING_OFF = "\x1b[?1006l\x1b[?1003l\x1b[?1000l";
 
 function ansiSequenceEnd(line: string, start: number): number {
 	const next = line.charCodeAt(start + 1);
@@ -186,7 +190,7 @@ function isTermuxSession(): boolean {
 
 /** Detect terminal multiplexers where scrollback clearing and height-change redraws are hostile. */
 function isMultiplexer() {
-	return Boolean(Bun.env.TMUX || Bun.env.STY || Bun.env.ZELLIJ);
+	return isInsideTerminalMultiplexer();
 }
 
 /**
@@ -194,6 +198,10 @@ function isMultiplexer() {
  * Values can be absolute numbers or percentage strings (e.g., "50%").
  */
 export interface OverlayOptions {
+	/** Borrow the alternate screen and render this overlay as a full viewport. */
+	fullscreen?: boolean;
+	/** Enable SGR mouse reporting while fullscreen. Defaults to true. */
+	mouseTracking?: boolean;
 	// === Sizing ===
 	/** Width in columns, or percentage of terminal width (e.g., "50%") */
 	width?: SizeValue;
@@ -313,6 +321,11 @@ export class TUI extends Container {
 	#maxLinesRendered = 0; // High-water line count used for clear-on-shrink policy
 	#fullRedrawCount = 0;
 	#stopped = false;
+	#fullscreenActive = false;
+	#mouseTrackingActive = false;
+	#fullscreenLines: string[] = [];
+	#fullscreenWidth = 0;
+	#fullscreenHeight = 0;
 	#viewportObservers = new Map<number, { callback: (visible: boolean) => void; visible: boolean }>();
 	#nextViewportObserverId = 1;
 
@@ -679,6 +692,7 @@ export class TUI extends Container {
 	stop(): void {
 		this.#clearSixelProbeState();
 		this.#stopped = true;
+		this.#leaveFullscreen();
 		// Move cursor to the end of the content to prevent overwriting/artifacts on exit
 		if (this.#previousLines.length > 0) {
 			const targetRow = this.#previousLines.length; // Line after the last content
@@ -769,6 +783,21 @@ export class TUI extends Container {
 				// No visible overlays, restore to preFocus
 				this.setFocus(focusedOverlay.preFocus);
 			}
+		}
+
+		const focusedComponent = this.#focusedComponent as (Component & Partial<MouseRoutable>) | null;
+		const routeMouse = focusedComponent?.routeMouse;
+		if (
+			this.#fullscreenActive &&
+			focusedComponent &&
+			typeof routeMouse === "function" &&
+			routeSgrMouseInput(data, event => {
+				routeMouse.call(focusedComponent, event, event.row, event.col);
+				return true;
+			})
+		) {
+			this.requestRender();
+			return;
 		}
 
 		// Pass input to focused component (including Ctrl+C)
@@ -1126,6 +1155,27 @@ export class TUI extends Container {
 		if (this.#stopped) return;
 		const width = this.terminal.columns;
 		const height = this.terminal.rows;
+		const topOverlay = this.#getTopmostVisibleOverlay();
+		const wantFullscreen = topOverlay?.options?.fullscreen === true;
+		const wantMouse = wantFullscreen && topOverlay.options?.mouseTracking !== false;
+		if (wantFullscreen && topOverlay) {
+			if (!this.#fullscreenActive) {
+				this.terminal.write(`\x1b[?1049h${wantMouse ? MOUSE_TRACKING_ON : ""}`);
+				setAlternateScreenActive(true);
+				this.#fullscreenActive = true;
+				this.#mouseTrackingActive = wantMouse;
+				this.#fullscreenLines = [];
+			} else if (wantMouse !== this.#mouseTrackingActive) {
+				this.terminal.write(wantMouse ? MOUSE_TRACKING_ON : MOUSE_TRACKING_OFF);
+				this.#mouseTrackingActive = wantMouse;
+			}
+			this.#renderFullscreen(topOverlay.component, width, height);
+			return;
+		}
+		const restoredFromFullscreen = this.#fullscreenActive;
+		if (restoredFromFullscreen) {
+			this.#leaveFullscreen();
+		}
 		let viewportTop = Math.max(0, this.#maxLinesRendered - height);
 		let prevViewportTop = this.#viewportTopRow;
 		let hardwareCursorRow = this.#hardwareCursorRow;
@@ -1164,11 +1214,11 @@ export class TUI extends Container {
 		const heightChanged = this.#previousHeight !== 0 && this.#previousHeight !== height;
 
 		// Helper to clear scrollback and viewport and render all new lines
-		const fullRender = (clear: boolean): void => {
+		const fullRender = (clear: boolean, preserveScrollback = false): void => {
 			this.#fullRedrawCount += 1;
 			let buffer = "\x1b[?2026h"; // Begin synchronized output
 			// Skip clearing scrollback (3J) in multiplexers — users actively navigate scrollback history
-			if (clear) buffer += isMultiplexer() ? "\x1b[2J\x1b[H" : "\x1b[2J\x1b[H\x1b[3J";
+			if (clear) buffer += isMultiplexer() || preserveScrollback ? "\x1b[2J\x1b[H" : "\x1b[2J\x1b[H\x1b[3J";
 			const reset = SEGMENT_RESET;
 			for (let i = 0; i < newLines.length; i++) {
 				if (i > 0) buffer += "\r\n";
@@ -1210,7 +1260,7 @@ export class TUI extends Container {
 		// Width changes always need a full re-render because wrapping changes.
 		if (widthChanged) {
 			logRedraw(`terminal width changed (${this.#previousWidth} -> ${width})`);
-			fullRender(true);
+			fullRender(true, restoredFromFullscreen);
 			return;
 		}
 
@@ -1219,7 +1269,7 @@ export class TUI extends Container {
 		// In that environment, a full redraw causes the entire history to replay on every toggle.
 		if (heightChanged && !isTermuxSession() && !isMultiplexer()) {
 			logRedraw(`terminal height changed (${this.#previousHeight} -> ${height})`);
-			fullRender(true);
+			fullRender(true, restoredFromFullscreen);
 			return;
 		}
 
@@ -1421,6 +1471,47 @@ export class TUI extends Container {
 		this.#previousLines = newLines;
 		this.#previousWidth = width;
 		this.#previousHeight = height;
+	}
+
+	#renderFullscreen(component: Component, width: number, height: number): void {
+		const rendered = component
+			.render(width)
+			.slice(0, height)
+			.map(line => {
+				const withoutCursor = line.replaceAll(CURSOR_MARKER, "");
+				return visibleWidth(withoutCursor) > width ? sliceByColumn(withoutCursor, 0, width, true) : withoutCursor;
+			});
+		const frame = Array.from({ length: height }, (_, row) => rendered[row] ?? "");
+		if (
+			frame.length === this.#fullscreenLines.length &&
+			width === this.#fullscreenWidth &&
+			height === this.#fullscreenHeight &&
+			frame.every((line, row) => line === this.#fullscreenLines[row])
+		) {
+			return;
+		}
+		let buffer = "\x1b[?2026h\x1b[H";
+		for (let row = 0; row < height; row++) {
+			if (row > 0) buffer += "\r\n";
+			buffer += `\x1b[2K${frame[row]}${SEGMENT_RESET}`;
+		}
+		buffer += "\x1b[?2026l";
+		this.terminal.hideCursor();
+		this.terminal.write(buffer);
+		this.#fullscreenLines = frame;
+		this.#fullscreenWidth = width;
+		this.#fullscreenHeight = height;
+	}
+
+	#leaveFullscreen(): void {
+		if (!this.#fullscreenActive) return;
+		this.terminal.write(`${this.#mouseTrackingActive ? MOUSE_TRACKING_OFF : ""}\x1b[?1049l`);
+		setAlternateScreenActive(false);
+		this.#fullscreenActive = false;
+		this.#mouseTrackingActive = false;
+		this.#fullscreenLines = [];
+		this.#fullscreenWidth = 0;
+		this.#fullscreenHeight = 0;
 	}
 
 	/**

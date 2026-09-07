@@ -2,9 +2,11 @@ import { sanitizeText } from "@f5-sales-demo/pi-natives";
 import {
 	type Component,
 	extractPrintableText,
+	type MouseRoutable,
 	matchesKey,
 	padding,
 	replaceTabs,
+	type SgrMouseEvent,
 	truncateToWidth,
 	visibleWidth,
 } from "@f5-sales-demo/pi-tui";
@@ -182,6 +184,14 @@ export class DebugLogViewerModel {
 		if (this.#getCursorRow()?.kind !== "log" && !extendSelection) {
 			this.#selectionAnchorSelectableIndex = undefined;
 		}
+	}
+
+	moveCursorToRow(rowIndex: number): boolean {
+		const selectableIndex = this.#selectableRowIndices.indexOf(rowIndex);
+		if (selectableIndex < 0) return false;
+		this.#cursorSelectableIndex = selectableIndex;
+		this.#selectionAnchorSelectableIndex = undefined;
+		return true;
 	}
 
 	getSelectedLogIndices(): number[] {
@@ -462,7 +472,7 @@ export class DebugLogViewerModel {
 
 interface DebugLogViewerComponentOptions {
 	logs: string;
-	terminalRows: number;
+	terminalRows: number | (() => number);
 	onExit: () => void;
 	onStatus?: (message: string) => void;
 	onError?: (message: string) => void;
@@ -472,9 +482,9 @@ interface DebugLogViewerComponentOptions {
 	onUpdate?: () => void;
 }
 
-export class DebugLogViewerComponent implements Component {
+export class DebugLogViewerComponent implements Component, MouseRoutable {
 	#model: DebugLogViewerModel;
-	#terminalRows: number;
+	#getTerminalRows: () => number;
 	#onExit: () => void;
 	#onStatus?: (message: string) => void;
 	#onError?: (message: string) => void;
@@ -484,6 +494,9 @@ export class DebugLogViewerComponent implements Component {
 	#scrollRowOffset = 0;
 	#statusMessage: string | undefined;
 	#loadingOlder = false;
+	#bodyRowStart = 5;
+	#bodyRowCount = 0;
+	#bodyLineToRowIndex: Array<number | undefined> = [];
 
 	constructor(options: DebugLogViewerComponentOptions) {
 		this.#logSource = options.logSource;
@@ -493,7 +506,8 @@ export class DebugLogViewerComponent implements Component {
 			hasOlderLogs: this.#logSource?.hasOlderLogs.bind(this.#logSource),
 			loadOlderLogs: this.#logSource?.loadOlderLogs.bind(this.#logSource),
 		});
-		this.#terminalRows = options.terminalRows;
+		const terminalRows = options.terminalRows;
+		this.#getTerminalRows = typeof terminalRows === "function" ? terminalRows : () => terminalRows;
 		this.#onExit = options.onExit;
 		this.#onStatus = options.onStatus;
 		this.#onError = options.onError;
@@ -610,6 +624,7 @@ export class DebugLogViewerComponent implements Component {
 		const bodyHeight = this.#bodyHeight();
 
 		const rows = this.#renderRows(innerWidth);
+		this.#bodyRowCount = bodyHeight;
 		const visibleBodyLines = this.#renderVisibleBodyLines(rows, innerWidth, bodyHeight);
 
 		return [
@@ -622,6 +637,28 @@ export class DebugLogViewerComponent implements Component {
 			this.#frameLine(this.#statusText(), innerWidth),
 			this.#frameBottom(innerWidth),
 		];
+	}
+
+	routeMouse(event: SgrMouseEvent, _line: number, _col: number): void {
+		const overBody = event.row >= this.#bodyRowStart && event.row < this.#bodyRowStart + this.#bodyRowCount;
+		if (event.wheel !== null && overBody) {
+			this.#model.moveCursor(event.wheel * 3, false);
+			this.#ensureCursorVisible();
+			this.#onUpdate?.();
+			return;
+		}
+		if (!event.leftClick || !overBody) return;
+		const rowIndex = this.#bodyLineToRowIndex[event.row - this.#bodyRowStart];
+		if (rowIndex === undefined || !this.#model.moveCursorToRow(rowIndex)) return;
+		const target = this.#model.rows[rowIndex];
+		if (target?.kind === "load-older") {
+			void this.#handleLoadOlder();
+		} else if (target?.kind === "log") {
+			if (this.#model.isExpanded(target.logIndex)) this.#model.collapseSelected();
+			else this.#model.expandSelected();
+		}
+		this.#ensureCursorVisible();
+		this.#onUpdate?.();
 	}
 
 	#summaryText(): string {
@@ -650,7 +687,7 @@ export class DebugLogViewerComponent implements Component {
 	}
 
 	#bodyHeight(): number {
-		return Math.max(3, this.#terminalRows - 8);
+		return Math.max(3, this.#getTerminalRows() - 8);
 	}
 
 	async #handleLoadOlder(additionalCount: number = LOAD_OLDER_CHUNK): Promise<void> {
@@ -785,8 +822,10 @@ export class DebugLogViewerComponent implements Component {
 		innerWidth: number,
 		bodyHeight: number,
 	): string[] {
+		this.#bodyLineToRowIndex = [];
 		const lines: string[] = [];
 		if (rows.length === 0) {
+			this.#bodyLineToRowIndex.push(undefined);
 			lines.push(this.#frameLine(theme.fg("muted", "no matches"), innerWidth));
 		}
 		for (let i = this.#scrollRowOffset; i < rows.length; i++) {
@@ -799,6 +838,7 @@ export class DebugLogViewerComponent implements Component {
 				if (lines.length >= bodyHeight) {
 					break;
 				}
+				this.#bodyLineToRowIndex.push(row.rowIndex);
 				lines.push(this.#frameLine(line, innerWidth));
 			}
 
@@ -808,6 +848,7 @@ export class DebugLogViewerComponent implements Component {
 		}
 
 		while (lines.length < bodyHeight) {
+			this.#bodyLineToRowIndex.push(undefined);
 			lines.push(this.#frameLine("", innerWidth));
 		}
 

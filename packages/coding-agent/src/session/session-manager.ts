@@ -53,6 +53,7 @@ import type { SessionStorage, SessionStorageWriter } from "./session-storage";
 import { FileSessionStorage, MemorySessionStorage } from "./session-storage";
 
 export const CURRENT_SESSION_VERSION = 3;
+const DRAFT_ONLY_SESSION_MARKER = ".draft-only-session";
 
 export interface SessionHeader {
 	type: "session";
@@ -1452,6 +1453,7 @@ export class SessionManager {
 	#flushed: boolean = false;
 	#needsFullRewriteOnNextPersist: boolean = false;
 	#ensuredOnDisk: boolean = false;
+	#draftOnlySessionCleanupArmed = false;
 	#fileEntries: FileEntry[] = [];
 	#byId: Map<string, SessionEntry> = new Map();
 	#labelsById: Map<string, string> = new Map();
@@ -1754,6 +1756,7 @@ export class SessionManager {
 		this.#flushed = false;
 		this.#needsFullRewriteOnNextPersist = false;
 		this.#ensuredOnDisk = false;
+		this.#draftOnlySessionCleanupArmed = false;
 		this.#usageStatistics = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, premiumRequests: 0, cost: 0 };
 		this.#inMemoryArtifacts = null;
 		this.#inMemoryArtifactCounter = 0;
@@ -1931,11 +1934,13 @@ export class SessionManager {
 
 	/** Close the persistent writer after flushing all pending data. */
 	async close(): Promise<void> {
-		if (!this.#persistWriter) return;
-		await this.#queuePersistTask(async () => {
-			await this.#closePersistWriterInternal();
-			this.#flushed = true;
-		});
+		if (this.#persistWriter) {
+			await this.#queuePersistTask(async () => {
+				await this.#closePersistWriterInternal();
+				this.#flushed = true;
+			});
+		}
+		await this.#dropDraftOnlySessionIfEmpty();
 		if (this.#persistError) throw this.#persistError;
 	}
 
@@ -1967,6 +1972,96 @@ export class SessionManager {
 	getArtifactsDir(): string | null {
 		const sessionFile = this.#sessionFile;
 		return sessionFile ? sessionFile.slice(0, -6) : null;
+	}
+
+	#draftPath(): string | null {
+		const artifactsDir = this.getArtifactsDir();
+		return artifactsDir ? path.join(artifactsDir, "draft.txt") : null;
+	}
+
+	#draftOnlyMarkerPath(): string | null {
+		const artifactsDir = this.getArtifactsDir();
+		return artifactsDir ? path.join(artifactsDir, DRAFT_ONLY_SESSION_MARKER) : null;
+	}
+
+	async #dropDraftOnlySessionIfEmpty(): Promise<void> {
+		if (!this.#draftOnlySessionCleanupArmed) return;
+		const sessionFile = this.#sessionFile;
+		const draftPath = this.#draftPath();
+		if (!sessionFile || (draftPath && this.storage.existsSync(draftPath))) return;
+		if (this.#fileEntries.length !== 1) {
+			const markerPath = this.#draftOnlyMarkerPath();
+			if (markerPath) {
+				try {
+					await this.storage.unlink(markerPath);
+				} catch (error) {
+					if (!isEnoent(error)) throw error;
+				}
+			}
+			this.#draftOnlySessionCleanupArmed = false;
+			return;
+		}
+		const markerPath = this.#draftOnlyMarkerPath();
+		if (markerPath) {
+			try {
+				await this.storage.unlink(markerPath);
+			} catch (error) {
+				if (!isEnoent(error)) throw error;
+			}
+		}
+		try {
+			await this.storage.unlink(sessionFile);
+		} catch (error) {
+			if (!isEnoent(error)) throw error;
+		}
+		this.#draftOnlySessionCleanupArmed = false;
+		this.#ensuredOnDisk = false;
+		this.#flushed = false;
+	}
+
+	async saveDraft(text: string): Promise<void> {
+		const draftPath = this.#draftPath();
+		if (!draftPath || !this.persist) return;
+		if (text.length === 0) {
+			try {
+				await this.storage.unlink(draftPath);
+			} catch (error) {
+				if (!isEnoent(error)) throw error;
+			}
+			return;
+		}
+		const sessionFile = this.#sessionFile;
+		const materializesDraftOnlySession =
+			sessionFile !== undefined && !this.storage.existsSync(sessionFile) && this.#fileEntries.length === 1;
+		await this.ensureOnDisk();
+		if (materializesDraftOnlySession) {
+			const markerPath = this.#draftOnlyMarkerPath();
+			if (markerPath) await this.storage.writeText(markerPath, "");
+			this.#draftOnlySessionCleanupArmed = true;
+		}
+		await this.storage.writeText(draftPath, text);
+	}
+
+	async consumeDraft(): Promise<string | null> {
+		const draftPath = this.#draftPath();
+		if (!draftPath) return null;
+		let draft: string;
+		try {
+			draft = await this.storage.readText(draftPath);
+		} catch (error) {
+			if (isEnoent(error)) return null;
+			throw error;
+		}
+		try {
+			await this.storage.unlink(draftPath);
+		} catch (error) {
+			if (!isEnoent(error)) throw error;
+		}
+		const markerPath = this.#draftOnlyMarkerPath();
+		if (this.#fileEntries.length === 1 && markerPath && this.storage.existsSync(markerPath)) {
+			this.#draftOnlySessionCleanupArmed = true;
+		}
+		return draft;
 	}
 
 	/**

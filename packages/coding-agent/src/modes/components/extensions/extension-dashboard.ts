@@ -14,8 +14,10 @@
 import {
 	type Component,
 	Container,
+	type MouseRoutable,
 	matchesKey,
 	padding,
+	type SgrMouseEvent,
 	Spacer,
 	Text,
 	truncateToWidth,
@@ -30,17 +32,21 @@ import { InspectorPanel } from "./inspector-panel";
 import { applyFilter, createInitialState, filterByProvider, refreshState, toggleProvider } from "./state-manager";
 import type { DashboardState } from "./types";
 
-export class ExtensionDashboard extends Container {
+export class ExtensionDashboard extends Container implements MouseRoutable {
 	#state!: DashboardState;
 	#mainList!: ExtensionList;
 	#inspector!: InspectorPanel;
+	#body!: TwoColumnBody;
+	#tabRanges: Array<{ start: number; end: number; index: number }> = [];
+	#hoveredTabIndex: number | null = null;
 
 	onClose?: () => void;
+	onRequestRender?: () => void;
 
 	private constructor(
 		private readonly cwd: string,
 		private readonly settings: Settings | null,
-		private readonly terminalHeight: number,
+		private readonly getTerminalHeight: () => number,
 	) {
 		super();
 	}
@@ -48,9 +54,11 @@ export class ExtensionDashboard extends Container {
 	static async create(
 		cwd: string,
 		settings: Settings | null = null,
-		terminalHeight?: number,
+		terminalHeight?: number | (() => number),
 	): Promise<ExtensionDashboard> {
-		const dashboard = new ExtensionDashboard(cwd, settings, terminalHeight ?? process.stdout.rows ?? 24);
+		const getTerminalHeight =
+			typeof terminalHeight === "function" ? terminalHeight : () => terminalHeight ?? process.stdout.rows ?? 24;
+		const dashboard = new ExtensionDashboard(cwd, settings, getTerminalHeight);
 		await dashboard.#init();
 		return dashboard;
 	}
@@ -62,7 +70,7 @@ export class ExtensionDashboard extends Container {
 
 		// Calculate max visible items based on terminal height
 		// Reserve ~10 lines for header, tabs, help text, borders
-		const maxVisible = Math.max(5, Math.floor((this.terminalHeight - 10) / 2));
+		const maxVisible = Math.max(5, Math.floor((this.getTerminalHeight() - 10) / 2));
 
 		// Create main list - always focused
 		this.#mainList = new ExtensionList(
@@ -108,13 +116,13 @@ export class ExtensionDashboard extends Container {
 		this.addChild(new Text(theme.bold(theme.fg("contentAccent", " Extension Control Center")), 0, 0));
 
 		// Tab bar
-		this.addChild(new Text(this.#renderTabBar(), 0, 0));
+		this.addChild({ render: () => [this.#renderTabBar()], invalidate: () => {} });
 		this.addChild(new Spacer(1));
 
 		// 2-column body with height limit
 		// Reserve ~8 lines for header, tabs, help text, borders
-		const bodyMaxHeight = Math.max(5, this.terminalHeight - 8);
-		this.addChild(new TwoColumnBody(this.#mainList, this.#inspector, bodyMaxHeight));
+		this.#body = new TwoColumnBody(this.#mainList, this.#inspector, () => Math.max(5, this.getTerminalHeight() - 8));
+		this.addChild(this.#body);
 
 		this.addChild(new Spacer(1));
 		this.addChild(new Text(theme.fg("dim", " ↑/↓: navigate  Space: toggle  Tab: next provider  Esc: close"), 0, 0));
@@ -125,6 +133,8 @@ export class ExtensionDashboard extends Container {
 
 	#renderTabBar(): string {
 		const parts: string[] = [" "];
+		this.#tabRanges = [];
+		let column = 1;
 
 		for (let i = 0; i < this.#state.tabs.length; i++) {
 			const tab = this.#state.tabs[i];
@@ -139,8 +149,11 @@ export class ExtensionDashboard extends Container {
 			}
 
 			const displayLabel = isDisabled ? `${theme.status.disabled} ${label}` : label;
+			const rawLabel = ` ${displayLabel} `;
+			this.#tabRanges.push({ start: column, end: column + visibleWidth(rawLabel), index: i });
+			column += visibleWidth(rawLabel);
 
-			if (isActive) {
+			if (isActive || i === this.#hoveredTabIndex) {
 				// Active tab: background highlight
 				parts.push(theme.bg("selectedBg", ` ${displayLabel} `));
 			} else if (isDisabled) {
@@ -223,6 +236,11 @@ export class ExtensionDashboard extends Container {
 			if (!isEmptyEnabled) break;
 		}
 		this.#state.activeTabIndex = nextIndex;
+		this.#activateTab(nextIndex);
+	}
+
+	#activateTab(index: number): void {
+		this.#state.activeTabIndex = index;
 
 		// Re-filter for new tab
 		const tab = this.#state.tabs[this.#state.activeTabIndex];
@@ -242,6 +260,38 @@ export class ExtensionDashboard extends Container {
 		}
 
 		this.#buildLayout();
+	}
+
+	routeMouse(event: SgrMouseEvent, _line: number, _col: number): void {
+		if (event.motion) {
+			const hoveredTab =
+				event.row === 2
+					? (this.#tabRanges.find(range => event.col >= range.start && event.col < range.end)?.index ?? null)
+					: null;
+			this.#hoveredTabIndex = hoveredTab;
+		}
+		if (event.leftClick && event.row === 2) {
+			const hit = this.#tabRanges.find(range => event.col >= range.start && event.col < range.end);
+			const tab = hit ? this.#state.tabs[hit.index] : undefined;
+			if (hit && tab && !(tab.count === 0 && tab.enabled && tab.id !== "all")) this.#activateTab(hit.index);
+			return;
+		}
+		const bodyLine = event.row - 4;
+		if (bodyLine < 0 || bodyLine >= this.#body.maxHeight) {
+			if (event.motion) this.#mainList.setHoverIndex(null);
+			this.onRequestRender?.();
+			return;
+		}
+		if (event.col < this.#body.leftWidth) {
+			if (event.wheel !== null) this.#mainList.handleWheel(event.wheel);
+			else if (event.motion) this.#mainList.setHoverIndex(this.#mainList.hitTest(bodyLine));
+			else if (event.leftClick) this.#mainList.handleClick(bodyLine);
+		} else if (event.col >= this.#body.leftWidth + 3 && event.wheel !== null) {
+			this.#body.scrollInspector(event.wheel);
+		} else if (event.motion) {
+			this.#mainList.setHoverIndex(null);
+		}
+		this.onRequestRender?.();
 	}
 
 	handleInput(data: string): void {
@@ -291,28 +341,53 @@ export class ExtensionDashboard extends Container {
  * Two-column body component for side-by-side rendering.
  */
 class TwoColumnBody implements Component {
+	#leftWidth = 0;
+	#rightScroll = 0;
+	#rightTotal = 0;
 	constructor(
 		private readonly leftPane: ExtensionList,
 		private readonly rightPane: InspectorPanel,
-		private readonly maxHeight: number,
+		private readonly getMaxHeight: () => number,
 	) {}
 
+	get leftWidth(): number {
+		return this.#leftWidth;
+	}
+
+	get maxHeight(): number {
+		return this.getMaxHeight();
+	}
+
+	scrollInspector(delta: -1 | 1): void {
+		this.#rightScroll = Math.max(
+			0,
+			Math.min(Math.max(0, this.#rightTotal - this.maxHeight), this.#rightScroll + delta),
+		);
+	}
+
 	render(width: number): string[] {
+		const maxHeight = this.maxHeight;
+		this.leftPane.setMaxVisible(Math.max(5, Math.floor((maxHeight - 2) / 2)));
 		const leftWidth = Math.floor(width * 0.5);
+		this.#leftWidth = leftWidth;
 		const rightWidth = Math.max(0, width - leftWidth - 3);
 
 		const leftLines = this.leftPane.render(leftWidth);
 		const rightLines = this.rightPane.render(rightWidth);
+		this.#rightTotal = rightLines.length;
+		const maxScroll = Math.max(0, rightLines.length - maxHeight);
+		this.#rightScroll = Math.min(this.#rightScroll, maxScroll);
+		const visibleRight = rightLines.slice(this.#rightScroll, this.#rightScroll + maxHeight);
 
 		// Limit to maxHeight lines
-		const numLines = Math.min(this.maxHeight, Math.max(leftLines.length, rightLines.length));
+		const numLines = maxHeight;
 		const combined: string[] = [];
 		const separator = theme.fg("dim", ` ${theme.boxSharp.vertical} `);
 
 		for (let i = 0; i < numLines; i++) {
 			const left = truncateToWidth(leftLines[i] ?? "", leftWidth);
 			const leftPadded = left + padding(Math.max(0, leftWidth - visibleWidth(left)));
-			const right = truncateToWidth(rightLines[i] ?? "", rightWidth);
+			const right = truncateToWidth(visibleRight[i] ?? "", rightWidth);
 			combined.push(leftPadded + separator + right);
 		}
 

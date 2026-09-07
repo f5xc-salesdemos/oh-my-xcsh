@@ -53,6 +53,7 @@ export * from "./keys";
 export { type RenderLatexOptions, renderLatex } from "./latex";
 // Media playback state machine
 export * from "./media-playback";
+export * from "./mouse";
 // Mermaid diagram support
 // Input buffering for batch splitting
 export * from "./stdin-buffer";
@@ -61,6 +62,7 @@ export type * from "./symbols";
 export * from "./terminal";
 // Terminal image support
 export * from "./terminal-capabilities";
+export * from "./terminal-multiplexer";
 // TTY ID
 export * from "./ttyid";
 export * from "./tui";
