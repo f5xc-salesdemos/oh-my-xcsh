@@ -21,45 +21,47 @@ pub(crate) struct TrapCommand {
 impl builtins::Command for TrapCommand {
 	type Error = brush_core::Error;
 
-	async fn execute(
+	fn execute(
 		&self,
 		mut context: brush_core::ExecutionContext<'_>,
-	) -> Result<ExecutionResult, Self::Error> {
-		if self.list_signals {
-			brush_core::traps::format_signals(context.stdout(), TrapSignal::iterator())
-				.map(|()| ExecutionResult::success())
-		} else if self.print_trap_commands || self.args.is_empty() {
-			if !self.args.is_empty() {
-				for signal_type in &self.args {
-					Self::display_handlers_for(&context, signal_type.parse()?)?;
+	) -> impl Future<Output = Result<ExecutionResult, Self::Error>> {
+		futures::future::lazy(move |_| {
+			if self.list_signals {
+				brush_core::traps::format_signals(context.stdout(), TrapSignal::iterator())
+					.map(|()| ExecutionResult::success())
+			} else if self.print_trap_commands || self.args.is_empty() {
+				if !self.args.is_empty() {
+					for signal_type in &self.args {
+						Self::display_handlers_for(&context, signal_type.parse()?)?;
+					}
+				} else {
+					Self::display_all_handlers(&context)?;
 				}
+				Ok(ExecutionResult::success())
+			} else if self.args.len() == 1 {
+				// When only a single argument is given, it is assumed to be a signal name
+				// and an indication to remove the handlers for that signal.
+				let signal = self.args[0].as_str();
+				Self::remove_all_handlers(&mut context, signal.parse()?);
+				Ok(ExecutionResult::success())
+			} else if self.args[0] == "-" {
+				// Alternatively, "-" as the first argument indicates that the next
+				// argument is a signal name and we need to remove the handlers for that signal.
+				let signal = self.args[1].as_str();
+				Self::remove_all_handlers(&mut context, signal.parse()?);
+				Ok(ExecutionResult::success())
 			} else {
-				Self::display_all_handlers(&context)?;
-			}
-			Ok(ExecutionResult::success())
-		} else if self.args.len() == 1 {
-			// When only a single argument is given, it is assumed to be a signal name
-			// and an indication to remove the handlers for that signal.
-			let signal = self.args[0].as_str();
-			Self::remove_all_handlers(&mut context, signal.parse()?);
-			Ok(ExecutionResult::success())
-		} else if self.args[0] == "-" {
-			// Alternatively, "-" as the first argument indicates that the next
-			// argument is a signal name and we need to remove the handlers for that signal.
-			let signal = self.args[1].as_str();
-			Self::remove_all_handlers(&mut context, signal.parse()?);
-			Ok(ExecutionResult::success())
-		} else {
-			let handler = &self.args[0];
+				let handler = &self.args[0];
 
-			let mut signal_types = vec![];
-			for signal in &self.args[1..] {
-				signal_types.push(signal.parse()?);
-			}
+				let mut signal_types = vec![];
+				for signal in &self.args[1..] {
+					signal_types.push(signal.parse()?);
+				}
 
-			Self::register_handler(&mut context, signal_types, handler.as_str());
-			Ok(ExecutionResult::success())
-		}
+				Self::register_handler(&mut context, signal_types, handler.as_str());
+				Ok(ExecutionResult::success())
+			}
+		})
 	}
 }
 

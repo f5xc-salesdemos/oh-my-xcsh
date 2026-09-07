@@ -406,8 +406,7 @@ fn production_enumeration_isolation_preserves_direct_parent_creation() {
 	for direct_child in ["/tmp/terraform-provider-new", "/home/alice/new-config"] {
 		assert!(
 			plan.permits(Path::new(direct_child), FenceAccess::Write),
-			"{} must remain directly creatable",
-			direct_child
+			"{direct_child} must remain directly creatable"
 		);
 	}
 	for private_root in ["/tmp/xcsh-local", "/tmp/xcsh-tasks", "/home/alice/.xcsh/agent/sessions"] {

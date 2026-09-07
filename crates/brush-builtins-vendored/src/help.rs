@@ -25,19 +25,21 @@ pub(crate) struct HelpCommand {
 impl builtins::Command for HelpCommand {
 	type Error = brush_core::Error;
 
-	async fn execute(
+	fn execute(
 		&self,
 		context: brush_core::ExecutionContext<'_>,
-	) -> Result<brush_core::ExecutionResult, Self::Error> {
-		if self.topic_patterns.is_empty() {
-			Self::display_general_help(&context)?;
-		} else {
-			for topic_pattern in &self.topic_patterns {
-				self.display_help_for_topic_pattern(&context, topic_pattern)?;
+	) -> impl Future<Output = Result<brush_core::ExecutionResult, Self::Error>> {
+		futures::future::lazy(move |_| {
+			if self.topic_patterns.is_empty() {
+				Self::display_general_help(&context)?;
+			} else {
+				for topic_pattern in &self.topic_patterns {
+					self.display_help_for_topic_pattern(&context, topic_pattern)?;
+				}
 			}
-		}
 
-		Ok(ExecutionResult::success())
+			Ok(ExecutionResult::success())
+		})
 	}
 }
 

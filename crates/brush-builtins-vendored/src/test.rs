@@ -16,29 +16,31 @@ pub(crate) struct TestCommand {
 impl builtins::Command for TestCommand {
 	type Error = brush_core::Error;
 
-	async fn execute(
+	fn execute(
 		&self,
 		context: brush_core::ExecutionContext<'_>,
-	) -> Result<brush_core::ExecutionResult, Self::Error> {
-		let mut args = self.args.as_slice();
+	) -> impl Future<Output = Result<brush_core::ExecutionResult, Self::Error>> {
+		futures::future::lazy(move |_| {
+			let mut args = self.args.as_slice();
 
-		if context.command_name == "[" {
-			match args.last() {
-				Some(s) if s == "]" => (),
-				None | Some(_) => {
-					writeln!(context.stderr(), "[: missing ']'")?;
-					return Ok(ExecutionExitCode::InvalidUsage.into());
-				},
+			if context.command_name == "[" {
+				match args.last() {
+					Some(s) if s == "]" => (),
+					None | Some(_) => {
+						writeln!(context.stderr(), "[: missing ']'")?;
+						return Ok(ExecutionExitCode::InvalidUsage.into());
+					},
+				}
+
+				args = &args[0..args.len() - 1];
 			}
 
-			args = &args[0..args.len() - 1];
-		}
-
-		if execute_test(context.shell, &context.params, args)? {
-			Ok(ExecutionResult::success())
-		} else {
-			Ok(ExecutionResult::general_error())
-		}
+			if execute_test(context.shell, &context.params, args)? {
+				Ok(ExecutionResult::success())
+			} else {
+				Ok(ExecutionResult::general_error())
+			}
+		})
 	}
 }
 

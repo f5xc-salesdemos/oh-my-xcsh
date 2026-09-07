@@ -120,6 +120,34 @@ impl Pattern {
 		true
 	}
 
+	fn path_components(&self) -> Vec<PatternWord> {
+		let mut components: Vec<PatternWord> = vec![];
+		for piece in &self.pieces {
+			let mut split_result = piece
+				.as_str()
+				.split(std::path::MAIN_SEPARATOR)
+				.map(|s| match piece {
+					PatternPiece::Pattern(_) => PatternPiece::Pattern(s.to_owned()),
+					PatternPiece::Literal(_) => PatternPiece::Literal(s.to_owned()),
+				})
+				.collect::<VecDeque<_>>();
+
+			if let Some(first_piece) = split_result.pop_front() {
+				if let Some(last_component) = components.last_mut() {
+					last_component.push(first_piece);
+				} else {
+					components.push(vec![first_piece]);
+				}
+			}
+
+			while let Some(piece) = split_result.pop_front() {
+				components.push(vec![piece]);
+			}
+		}
+
+		components
+	}
+
 	/// Expands the pattern into a list of matching file paths.
 	///
 	/// # Arguments
@@ -127,7 +155,6 @@ impl Pattern {
 	/// * `working_dir` - The current working directory, used for relative paths.
 	/// * `path_filter` - Optionally provides a function that filters paths after expansion.
 	/// * `enumerate_filter` - Optionally decides whether a directory may be read during expansion.
-
 	#[allow(clippy::unwrap_in_result)]
 	pub(crate) fn expand<PF, EF>(
 		&self,
@@ -163,38 +190,12 @@ impl Pattern {
 
 		tracing::debug!(target: trace_categories::PATTERN, "expanding pattern: {self:?}");
 
-		let mut components: Vec<PatternWord> = vec![];
-		for piece in &self.pieces {
-			let mut split_result = piece
-				.as_str()
-				.split(std::path::MAIN_SEPARATOR)
-				.map(|s| match piece {
-					PatternPiece::Pattern(_) => PatternPiece::Pattern(s.to_owned()),
-					PatternPiece::Literal(_) => PatternPiece::Literal(s.to_owned()),
-				})
-				.collect::<VecDeque<_>>();
-
-			if let Some(first_piece) = split_result.pop_front() {
-				if let Some(last_component) = components.last_mut() {
-					last_component.push(first_piece);
-				} else {
-					components.push(vec![first_piece]);
-				}
-			}
-
-			while let Some(piece) = split_result.pop_front() {
-				components.push(vec![piece]);
-			}
-		}
+		let components = self.path_components();
 
 		// Check if the path appears to be absolute.
-		let is_absolute = if let Some(first_component) = components.first() {
-			first_component
-				.iter()
-				.all(|piece| piece.as_str().is_empty())
-		} else {
-			false
-		};
+		let is_absolute = components
+			.first()
+			.is_some_and(|first| first.iter().all(|piece| piece.as_str().is_empty()));
 
 		let prefix_to_remove;
 		let mut paths_so_far = if is_absolute {

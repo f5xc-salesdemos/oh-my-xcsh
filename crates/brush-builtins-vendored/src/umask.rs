@@ -23,37 +23,39 @@ pub(crate) struct UmaskCommand {
 impl builtins::Command for UmaskCommand {
 	type Error = brush_core::Error;
 
-	async fn execute(
+	fn execute(
 		&self,
 		context: brush_core::ExecutionContext<'_>,
-	) -> Result<brush_core::ExecutionResult, Self::Error> {
-		if let Some(mode) = &self.mode {
-			if mode.starts_with(|c: char| c.is_digit(8)) {
-				let parsed = nix::sys::stat::mode_t::from_str_radix(mode.as_str(), 8)?;
-				set_umask(parsed)?;
+	) -> impl Future<Output = Result<brush_core::ExecutionResult, Self::Error>> {
+		futures::future::lazy(move |_| {
+			if let Some(mode) = &self.mode {
+				if mode.starts_with(|c: char| c.is_digit(8)) {
+					let parsed = nix::sys::stat::mode_t::from_str_radix(mode.as_str(), 8)?;
+					set_umask(parsed)?;
+				} else {
+					return brush_core::error::unimp("umask setting mode from symbolic value");
+				}
 			} else {
-				return brush_core::error::unimp("umask setting mode from symbolic value");
+				let umask = get_umask()?;
+
+				let formatted = if self.symbolic_output {
+					let u = symbolic_mask_from_bits((!umask & 0o700) >> 6);
+					let g = symbolic_mask_from_bits((!umask & 0o070) >> 3);
+					let o = symbolic_mask_from_bits(!umask & 0o007);
+					std::format!("u={u},g={g},o={o}")
+				} else {
+					std::format!("{umask:04o}")
+				};
+
+				if self.print_roundtrippable {
+					writeln!(context.stdout(), "umask {formatted}")?;
+				} else {
+					writeln!(context.stdout(), "{formatted}")?;
+				}
 			}
-		} else {
-			let umask = get_umask()?;
 
-			let formatted = if self.symbolic_output {
-				let u = symbolic_mask_from_bits((!umask & 0o700) >> 6);
-				let g = symbolic_mask_from_bits((!umask & 0o070) >> 3);
-				let o = symbolic_mask_from_bits(!umask & 0o007);
-				std::format!("u={u},g={g},o={o}")
-			} else {
-				std::format!("{umask:04o}")
-			};
-
-			if self.print_roundtrippable {
-				writeln!(context.stdout(), "umask {formatted}")?;
-			} else {
-				writeln!(context.stdout(), "{formatted}")?;
-			}
-		}
-
-		Ok(ExecutionResult::success())
+			Ok(ExecutionResult::success())
+		})
 	}
 }
 

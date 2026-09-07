@@ -33,67 +33,69 @@ pub(crate) struct CdCommand {
 impl builtins::Command for CdCommand {
 	type Error = brush_core::Error;
 
-	async fn execute(
+	fn execute(
 		&self,
 		context: brush_core::ExecutionContext<'_>,
-	) -> Result<ExecutionResult, Self::Error> {
-		// TODO: implement 'cd -@'
-		if self.file_with_xattr_as_dir {
-			return error::unimp("cd -@");
-		}
+	) -> impl Future<Output = Result<ExecutionResult, Self::Error>> {
+		futures::future::lazy(move |_| {
+			// TODO: implement 'cd -@'
+			if self.file_with_xattr_as_dir {
+				return error::unimp("cd -@");
+			}
 
-		let mut should_print = false;
-		let mut target_dir = if let Some(target_dir) = &self.target_dir {
-			// `cd -', equivalent to `cd $OLDPWD'
-			if target_dir.as_os_str() == "-" {
-				should_print = true;
-				if let Some(oldpwd) = context.shell.env_str("OLDPWD") {
-					PathBuf::from(oldpwd.to_string())
+			let mut should_print = false;
+			let mut target_dir = if let Some(target_dir) = &self.target_dir {
+				// `cd -', equivalent to `cd $OLDPWD'
+				if target_dir.as_os_str() == "-" {
+					should_print = true;
+					if let Some(oldpwd) = context.shell.env_str("OLDPWD") {
+						PathBuf::from(oldpwd.to_string())
+					} else {
+						writeln!(context.stderr(), "OLDPWD not set")?;
+						return Ok(ExecutionResult::general_error());
+					}
 				} else {
-					writeln!(context.stderr(), "OLDPWD not set")?;
+					// TODO: remove clone, and use temporary lifetime extension after rust 1.75
+					target_dir.clone()
+				}
+			// `cd' without arguments is equivalent to `cd $HOME'
+			} else {
+				if let Some(home_var) = context.shell.env_str("HOME") {
+					PathBuf::from(home_var.to_string())
+				} else {
+					writeln!(context.stderr(), "HOME not set")?;
 					return Ok(ExecutionResult::general_error());
 				}
-			} else {
-				// TODO: remove clone, and use temporary lifetime extension after rust 1.75
-				target_dir.clone()
-			}
-		// `cd' without arguments is equivalent to `cd $HOME'
-		} else {
-			if let Some(home_var) = context.shell.env_str("HOME") {
-				PathBuf::from(home_var.to_string())
-			} else {
-				writeln!(context.stderr(), "HOME not set")?;
-				return Ok(ExecutionResult::general_error());
-			}
-		};
+			};
 
-		if self.use_physical_dir
-			|| context
+			if self.use_physical_dir
+				|| context
+					.shell
+					.options
+					.do_not_resolve_symlinks_when_changing_dir
+			{
+				// -e is only relevant in physical mode.
+				if self.exit_on_failed_cwd_resolution {
+					return error::unimp("cd -e");
+				}
+
+				target_dir = context.shell.absolute_path(target_dir).canonicalize()?;
+			}
+
+			context
 				.shell
-				.options
-				.do_not_resolve_symlinks_when_changing_dir
-		{
-			// -e is only relevant in physical mode.
-			if self.exit_on_failed_cwd_resolution {
-				return error::unimp("cd -e");
+				.change_working_dir(&target_dir, &context.params)?;
+
+			// Bash compatibility
+			// https://www.gnu.org/software/bash/manual/bash.html#index-cd
+			// If a non-empty directory name from CDPATH is used, or if '-' is the first argument, and
+			// the directory change is successful, the absolute pathname of the new working
+			// directory is written to the standard output.
+			if should_print {
+				writeln!(context.stdout(), "{}", target_dir.display())?;
 			}
 
-			target_dir = context.shell.absolute_path(target_dir).canonicalize()?;
-		}
-
-		context
-			.shell
-			.change_working_dir(&target_dir, &context.params)?;
-
-		// Bash compatibility
-		// https://www.gnu.org/software/bash/manual/bash.html#index-cd
-		// If a non-empty directory name from CDPATH is used, or if '-' is the first argument, and
-		// the directory change is successful, the absolute pathname of the new working
-		// directory is written to the standard output.
-		if should_print {
-			writeln!(context.stdout(), "{}", target_dir.display())?;
-		}
-
-		Ok(ExecutionResult::success())
+			Ok(ExecutionResult::success())
+		})
 	}
 }

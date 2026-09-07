@@ -17,23 +17,25 @@ pub(crate) struct UnaliasCommand {
 impl builtins::Command for UnaliasCommand {
 	type Error = brush_core::Error;
 
-	async fn execute(
+	fn execute(
 		&self,
 		context: brush_core::ExecutionContext<'_>,
-	) -> Result<brush_core::ExecutionResult, Self::Error> {
-		let mut exit_code = ExecutionResult::success();
+	) -> impl Future<Output = Result<brush_core::ExecutionResult, Self::Error>> {
+		futures::future::lazy(move |_| {
+			let mut exit_code = ExecutionResult::success();
 
-		if self.remove_all {
-			context.shell.aliases.clear();
-		} else {
-			for alias in &self.aliases {
-				if context.shell.aliases.remove(alias).is_none() {
-					writeln!(context.stderr(), "{}: {}: not found", context.command_name, alias)?;
-					exit_code = ExecutionResult::general_error();
+			if self.remove_all {
+				context.shell.aliases.clear();
+			} else {
+				for alias in &self.aliases {
+					if context.shell.aliases.remove(alias).is_none() {
+						writeln!(context.stderr(), "{}: {}: not found", context.command_name, alias)?;
+						exit_code = ExecutionResult::general_error();
+					}
 				}
 			}
-		}
 
-		Ok(exit_code)
+			Ok(exit_code)
+		})
 	}
 }

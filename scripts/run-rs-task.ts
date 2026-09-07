@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 
 import { $ } from "bun";
+import { existsSync } from "node:fs";
 import * as path from "node:path";
 
 const RUST_AFFECTING_FILE_NAMES = [
@@ -17,7 +18,7 @@ const RUST_AFFECTING_FILE_NAMES = [
 const TASK_COMMANDS = {
 	"check:rs": [
 		["cargo", "fmt", "--all", "--", "--check"],
-		["cargo", "clippy", "--workspace", "--", "-D", "warnings"],
+		["cargo", "clippy", "--workspace", "--all-targets", "--all-features", "--", "-D", "warnings"],
 	],
 	"fix:rs": [
 		["cargo", "fmt", "--all"],
@@ -35,8 +36,8 @@ const TASK_COMMANDS = {
 		],
 	],
 	"fmt:rs": [["cargo", "fmt", "--all"]],
-	"lint:rs": [["cargo", "clippy", "--workspace", "--", "-D", "warnings"]],
-	"test:rs": [["cargo", "nextest", "run", "--workspace", "--status-level=fail", "--final-status-level=fail"]],
+	"lint:rs": [["cargo", "clippy", "--workspace", "--all-targets", "--all-features", "--", "-D", "warnings"]],
+	"test:rs": [["cargo", "nextest", "run", "--workspace", "--all-features", "--status-level=fail", "--final-status-level=fail"]],
 } as const satisfies Record<string, readonly (readonly string[])[]>;
 
 type RustTaskName = keyof typeof TASK_COMMANDS;
@@ -58,12 +59,42 @@ if (import.meta.main) {
 		process.exit(0);
 	}
 
-	for (const command of TASK_COMMANDS[taskName]) {
-		const exitCode = await runCommand(command);
-		if (exitCode !== 0) {
-			process.exit(exitCode);
+	const manifests = await discoverRustManifests(repoRoot);
+	for (const manifest of manifests) {
+		for (const command of TASK_COMMANDS[taskName]) {
+			const args: string[] = [...command];
+			const position = args[1] === "nextest" ? 3 : 2;
+			args.splice(position, 0, "--manifest-path", manifest);
+			const exitCode = await runCommand(args);
+			if (exitCode !== 0) process.exit(exitCode);
 		}
 	}
+}
+
+/** Discover tracked and new manifests, checking each Cargo workspace exactly once. */
+export async function discoverRustManifests(root: string): Promise<string[]> {
+	const files = await $`git ls-files --cached --others --exclude-standard -z`.cwd(root).quiet();
+	const manifests = [...new Set(files.stdout.toString().split("\0")
+		.filter(file => path.basename(file) === "Cargo.toml")
+		.map(file => path.resolve(root, file)).filter(existsSync))].sort((a, b) => a.length - b.length || a.localeCompare(b));
+	const covered = new Set<string>();
+	const workspaces = new Set<string>();
+	for (const manifest of manifests) {
+		if (covered.has(manifest)) continue;
+		const result = await $`cargo metadata --no-deps --format-version 1 --manifest-path ${manifest}`.cwd(root).quiet();
+		const metadata = JSON.parse(result.stdout.toString()) as {
+			workspace_root: string;
+			workspace_members: string[];
+			packages: { id: string; manifest_path: string }[];
+		};
+		workspaces.add(path.join(metadata.workspace_root, "Cargo.toml"));
+		const members = new Set(metadata.workspace_members);
+		for (const pkg of metadata.packages) {
+			if (members.has(pkg.id)) covered.add(pkg.manifest_path);
+		}
+		covered.add(manifest);
+	}
+	return [...workspaces].sort();
 }
 
 function isRustTaskName(value: string | undefined): value is RustTaskName {
@@ -170,6 +201,7 @@ export function isRustAffectingPath(changedPath: string): boolean {
 	const normalized = changedPath.replace(/\\/g, "/");
 	const fileName = normalized.slice(normalized.lastIndexOf("/") + 1);
 	return (
+		normalized === "scripts/run-rs-task.ts" ||
 		normalized.endsWith(".rs") ||
 		normalized.startsWith(".cargo/") ||
 		isNativeSource(normalized) ||

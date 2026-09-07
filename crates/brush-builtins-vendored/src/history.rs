@@ -53,24 +53,26 @@ struct HistoryConfig {
 impl builtins::Command for HistoryCommand {
 	type Error = brush_core::Error;
 
-	async fn execute(
+	fn execute(
 		&self,
 		context: brush_core::ExecutionContext<'_>,
-	) -> Result<ExecutionResult, Self::Error> {
-		// Retrieve the shell's history config while we still can.
-		let config = HistoryConfig {
-			default_history_file_path: context.shell.history_file_path(),
-			time_format: context.shell.history_time_format(),
-		};
+	) -> impl Future<Output = Result<ExecutionResult, Self::Error>> {
+		futures::future::lazy(move |_| {
+			// Retrieve the shell's history config while we still can.
+			let config = HistoryConfig {
+				default_history_file_path: context.shell.history_file_path(),
+				time_format: context.shell.history_time_format(),
+			};
 
-		let stdout = context.stdout();
-		let stderr = context.stderr();
+			let stdout = context.stdout();
+			let stderr = context.stderr();
 
-		if let Some(history) = context.shell.history_mut() {
-			self.execute_with_history(history, config, stdout, stderr)
-		} else {
-			Err(brush_core::ErrorKind::HistoryNotEnabled.into())
-		}
+			if let Some(history) = context.shell.history_mut() {
+				self.execute_with_history(history, config, stdout, stderr)
+			} else {
+				Err(brush_core::ErrorKind::HistoryNotEnabled.into())
+			}
+		})
 	}
 }
 

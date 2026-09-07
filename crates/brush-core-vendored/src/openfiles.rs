@@ -78,7 +78,7 @@ impl OpenFile {
 	pub(crate) fn is_dir(&self) -> bool {
 		match self {
 			Self::Stdin(_) | Self::Stdout(_) | Self::Stderr(_) => false,
-			Self::File(file) => file.metadata().map(|m| m.is_dir()).unwrap_or(false),
+			Self::File(file) => file.metadata().is_ok_and(|m| m.is_dir()),
 			Self::PipeReader(_) | Self::PipeWriter(_) => false,
 		}
 	}
@@ -98,7 +98,7 @@ impl OpenFile {
 		#[cfg(unix)]
 		{
 			let owned_fd = self.into_owned_fd()?;
-			return Ok(Stdio::from(std::fs::File::from(owned_fd)));
+			Ok(Stdio::from(std::fs::File::from(owned_fd)))
 		}
 
 		#[cfg(not(unix))]

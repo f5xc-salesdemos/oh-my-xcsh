@@ -247,11 +247,11 @@ impl PtyFd {
         let mut cmd = builder.as_command()?;
         let controlling_tty = builder.get_controlling_tty();
 
-        if let Some(mut pre_exec) = child_pre_exec.take() {
+        if let Some(pre_exec) = child_pre_exec.take() {
             // SAFETY: The caller accepts CommandExt::pre_exec's post-fork restrictions. Register this
             // before portable-pty's own hook so security state is established first.
             unsafe {
-                cmd.pre_exec(move || pre_exec());
+                cmd.pre_exec(pre_exec);
             }
         }
 

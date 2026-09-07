@@ -222,7 +222,6 @@ impl ShellVariable {
 	///
 	/// * `value` - The value to assign to the variable.
 	/// * `append` - Whether or not to append the value to the preexisting value.
-
 	pub fn assign(&mut self, value: ShellValueLiteral, append: bool) -> Result<(), error::Error> {
 		if self.is_readonly() {
 			return Err(error::ErrorKind::ReadonlyVariable.into());

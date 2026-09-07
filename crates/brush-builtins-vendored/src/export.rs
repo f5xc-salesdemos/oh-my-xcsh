@@ -40,24 +40,26 @@ impl builtins::DeclarationCommand for ExportCommand {
 impl builtins::Command for ExportCommand {
 	type Error = brush_core::Error;
 
-	async fn execute(
+	fn execute(
 		&self,
 		mut context: brush_core::ExecutionContext<'_>,
-	) -> Result<brush_core::ExecutionResult, Self::Error> {
-		if self.declarations.is_empty() {
-			display_all_exported_vars(&context)?;
-			return Ok(ExecutionResult::success());
-		}
-
-		let mut result = ExecutionResult::success();
-		for decl in &self.declarations {
-			let current_result = self.process_decl(&mut context, decl)?;
-			if !current_result.is_success() {
-				result = current_result;
+	) -> impl Future<Output = Result<brush_core::ExecutionResult, Self::Error>> {
+		futures::future::lazy(move |_| {
+			if self.declarations.is_empty() {
+				display_all_exported_vars(&context)?;
+				return Ok(ExecutionResult::success());
 			}
-		}
 
-		Ok(result)
+			let mut result = ExecutionResult::success();
+			for decl in &self.declarations {
+				let current_result = self.process_decl(&mut context, decl)?;
+				if !current_result.is_success() {
+					result = current_result;
+				}
+			}
+
+			Ok(result)
+		})
 	}
 }
 

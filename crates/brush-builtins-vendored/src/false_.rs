@@ -9,10 +9,10 @@ pub(crate) struct FalseCommand {}
 impl builtins::Command for FalseCommand {
 	type Error = brush_core::Error;
 
-	async fn execute(
+	fn execute(
 		&self,
 		_context: brush_core::ExecutionContext<'_>,
-	) -> Result<ExecutionResult, Self::Error> {
-		Ok(ExecutionResult::general_error())
+	) -> impl Future<Output = Result<ExecutionResult, Self::Error>> {
+		futures::future::lazy(move |_| Ok(ExecutionResult::general_error()))
 	}
 }

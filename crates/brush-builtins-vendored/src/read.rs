@@ -61,124 +61,116 @@ pub(crate) struct ReadCommand {
 impl builtins::Command for ReadCommand {
 	type Error = brush_core::Error;
 
-	async fn execute(
+	fn execute(
 		&self,
 		context: brush_core::ExecutionContext<'_>,
-	) -> Result<brush_core::ExecutionResult, Self::Error> {
-		if self.use_readline {
-			return error::unimp("read -e");
-		}
-		if self.initial_text.is_some() {
-			return error::unimp("read -i");
-		}
-		if self.raw_mode {
-			tracing::debug!("read -r is not implemented");
-		}
-		if self.timeout_in_seconds.is_some() {
-			return error::unimp_with_issue("read -t", 227);
-		}
+	) -> impl Future<Output = Result<brush_core::ExecutionResult, Self::Error>> {
+		futures::future::lazy(move |_| {
+			self.check_supported_options()?;
 
-		// Find the input stream to use.
-		let input_stream = if let Some(fd_num) = self.fd_num_to_read {
-			let fd_num = brush_core::ShellFd::from(fd_num);
-			context
-				.try_fd(fd_num)
-				.ok_or_else(|| ErrorKind::BadFileDescriptor(fd_num))?
-		} else {
-			context
-				.try_fd(brush_core::openfiles::OpenFiles::STDIN_FD)
-				.unwrap()
-		};
-
-		// Retrieve effective value of IFS for splitting.
-		let ifs = context.shell.ifs();
-
-		let input_line = self.read_line(input_stream, context.stdout(), || context.is_cancelled())?;
-		let result = if input_line.is_some() {
-			brush_core::ExecutionResult::success()
-		} else {
-			brush_core::ExecutionResult::general_error()
-		};
-
-		// If -a was specified, then place the fields as elements into the array.
-		if let Some(array_variable) = &self.array_variable {
-			let literal_fields = if let Some(input_line) = input_line {
-				let fields: VecDeque<_> =
-					split_line_by_ifs(ifs.as_ref(), input_line.as_str(), None /* max_fields */);
-
-				fields.into_iter().map(|f| (None, f)).collect()
+			// Find the input stream to use.
+			let input_stream = if let Some(fd_num) = self.fd_num_to_read {
+				let fd_num = brush_core::ShellFd::from(fd_num);
+				context
+					.try_fd(fd_num)
+					.ok_or_else(|| ErrorKind::BadFileDescriptor(fd_num))?
 			} else {
-				vec![]
+				context
+					.try_fd(brush_core::openfiles::OpenFiles::STDIN_FD)
+					.unwrap()
 			};
 
-			context.shell.env.update_or_add(
-				array_variable,
-				variables::ShellValueLiteral::Array(variables::ArrayLiteral(literal_fields)),
-				|_| Ok(()),
-				env::EnvironmentLookup::Anywhere,
-				env::EnvironmentScope::Global,
-			)?;
-		} else if !self.variable_names.is_empty() {
-			let mut fields: VecDeque<_> = if let Some(input_line) = input_line {
-				split_line_by_ifs(
-					ifs.as_ref(),
-					input_line.as_str(),
-					/* max_fields */ Some(self.variable_names.len()),
-				)
+			// Retrieve effective value of IFS for splitting.
+			let ifs = context.shell.ifs();
+
+			let input_line =
+				self.read_line(input_stream, context.stdout(), || context.is_cancelled())?;
+			let result = if input_line.is_some() {
+				brush_core::ExecutionResult::success()
 			} else {
-				VecDeque::new()
+				brush_core::ExecutionResult::general_error()
 			};
 
-			for (i, name) in self.variable_names.iter().enumerate() {
-				if fields.is_empty() {
-					// Ensure the var is empty.
-					context.shell.env.update_or_add(
-						name,
-						variables::ShellValueLiteral::Scalar(String::new()),
-						|_| Ok(()),
-						env::EnvironmentLookup::Anywhere,
-						env::EnvironmentScope::Global,
-					)?;
-					continue;
-				}
+			// If -a was specified, then place the fields as elements into the array.
+			if let Some(array_variable) = &self.array_variable {
+				let literal_fields = if let Some(input_line) = input_line {
+					let fields: VecDeque<_> =
+						split_line_by_ifs(ifs.as_ref(), input_line.as_str(), None /* max_fields */);
 
-				let last = i == self.variable_names.len() - 1;
-				if !last {
-					let next_field = fields.pop_front().unwrap();
-					context.shell.env.update_or_add(
-						name,
-						variables::ShellValueLiteral::Scalar(next_field),
-						|_| Ok(()),
-						env::EnvironmentLookup::Anywhere,
-						env::EnvironmentScope::Global,
-					)?;
+					fields.into_iter().map(|f| (None, f)).collect()
 				} else {
-					let remaining_fields = fields.into_iter().join(" ");
-					context.shell.env.update_or_add(
-						name,
-						variables::ShellValueLiteral::Scalar(remaining_fields),
-						|_| Ok(()),
-						env::EnvironmentLookup::Anywhere,
-						env::EnvironmentScope::Global,
-					)?;
-					break;
+					vec![]
+				};
+
+				context.shell.env.update_or_add(
+					array_variable,
+					variables::ShellValueLiteral::Array(variables::ArrayLiteral(literal_fields)),
+					|_| Ok(()),
+					env::EnvironmentLookup::Anywhere,
+					env::EnvironmentScope::Global,
+				)?;
+			} else if !self.variable_names.is_empty() {
+				let mut fields: VecDeque<_> = if let Some(input_line) = input_line {
+					split_line_by_ifs(
+						ifs.as_ref(),
+						input_line.as_str(),
+						/* max_fields */ Some(self.variable_names.len()),
+					)
+				} else {
+					VecDeque::new()
+				};
+
+				for (i, name) in self.variable_names.iter().enumerate() {
+					if fields.is_empty() {
+						// Ensure the var is empty.
+						context.shell.env.update_or_add(
+							name,
+							variables::ShellValueLiteral::Scalar(String::new()),
+							|_| Ok(()),
+							env::EnvironmentLookup::Anywhere,
+							env::EnvironmentScope::Global,
+						)?;
+						continue;
+					}
+
+					let last = i == self.variable_names.len() - 1;
+					if !last {
+						let next_field = fields.pop_front().unwrap();
+						context.shell.env.update_or_add(
+							name,
+							variables::ShellValueLiteral::Scalar(next_field),
+							|_| Ok(()),
+							env::EnvironmentLookup::Anywhere,
+							env::EnvironmentScope::Global,
+						)?;
+					} else {
+						let remaining_fields = fields.into_iter().join(" ");
+						context.shell.env.update_or_add(
+							name,
+							variables::ShellValueLiteral::Scalar(remaining_fields),
+							|_| Ok(()),
+							env::EnvironmentLookup::Anywhere,
+							env::EnvironmentScope::Global,
+						)?;
+						break;
+					}
 				}
+			} else {
+				let input_line = input_line.unwrap_or_default();
+
+				// If no variable names were specified, then place everything into the
+				// REPLY variable.
+				context.shell.env.update_or_add(
+					"REPLY",
+					variables::ShellValueLiteral::Scalar(input_line),
+					|_| Ok(()),
+					env::EnvironmentLookup::Anywhere,
+					env::EnvironmentScope::Global,
+				)?;
 			}
-		} else {
-			let input_line = input_line.unwrap_or_default();
 
-			// If no variable names were specified, then place everything into the
-			// REPLY variable.
-			context.shell.env.update_or_add(
-				"REPLY",
-				variables::ShellValueLiteral::Scalar(input_line),
-				|_| Ok(()),
-				env::EnvironmentLookup::Anywhere,
-				env::EnvironmentScope::Global,
-			)?;
-		}
-
-		Ok(result)
+			Ok(result)
+		})
 	}
 }
 
@@ -229,8 +221,8 @@ impl ReadCommand {
 		let mut buffer = [0; 1]; // 1-byte buffer
 
 		let reason = loop {
-			self.ensure_not_cancelled(&is_cancelled)?;
-			self.wait_for_input(&input_file, &is_cancelled)?;
+			Self::ensure_not_cancelled(&is_cancelled)?;
+			Self::wait_for_input(&input_file, &is_cancelled)?;
 
 			// TODO: Figure out how to restore terminal settings on error?
 			let n = input_file.read(&mut buffer)?;
@@ -304,7 +296,7 @@ impl ReadCommand {
 		Ok(mode)
 	}
 
-	fn ensure_not_cancelled<F>(&self, is_cancelled: &F) -> Result<(), brush_core::Error>
+	fn ensure_not_cancelled<F>(is_cancelled: &F) -> Result<(), brush_core::Error>
 	where
 		F: Fn() -> bool,
 	{
@@ -317,7 +309,6 @@ impl ReadCommand {
 
 	#[cfg(unix)]
 	fn wait_for_input<F>(
-		&self,
 		input_file: &brush_core::openfiles::OpenFile,
 		is_cancelled: &F,
 	) -> Result<(), brush_core::Error>
@@ -331,7 +322,7 @@ impl ReadCommand {
 		const INPUT_POLL_INTERVAL_MS: u16 = 100;
 
 		loop {
-			self.ensure_not_cancelled(is_cancelled)?;
+			Self::ensure_not_cancelled(is_cancelled)?;
 
 			let mut poll_fds = [PollFd::new(input_file.as_fd(), PollFlags::POLLIN)];
 			let poll_result = match poll(&mut poll_fds, PollTimeout::from(INPUT_POLL_INTERVAL_MS)) {
@@ -364,14 +355,13 @@ impl ReadCommand {
 
 	#[cfg(not(unix))]
 	fn wait_for_input<F>(
-		&self,
 		_input_file: &brush_core::openfiles::OpenFile,
 		is_cancelled: &F,
 	) -> Result<(), brush_core::Error>
 	where
 		F: Fn() -> bool,
 	{
-		self.ensure_not_cancelled(is_cancelled)
+		Self::ensure_not_cancelled(is_cancelled)
 	}
 }
 fn split_line_by_ifs(ifs: &str, line: &str, max_fields: Option<usize>) -> VecDeque<String> {
@@ -426,6 +416,25 @@ fn split_line_by_ifs(ifs: &str, line: &str, max_fields: Option<usize>) -> VecDeq
 	fields
 }
 
+impl ReadCommand {
+	fn check_supported_options(&self) -> Result<(), brush_core::Error> {
+		if self.use_readline {
+			return error::unimp("read -e");
+		}
+		if self.initial_text.is_some() {
+			return error::unimp("read -i");
+		}
+		if self.raw_mode {
+			tracing::debug!("read -r is not implemented");
+		}
+		if self.timeout_in_seconds.is_some() {
+			return error::unimp_with_issue("read -t", 227);
+		}
+
+		Ok(())
+	}
+}
+
 #[cfg(test)]
 mod tests {
 	use itertools::assert_equal;
@@ -464,45 +473,26 @@ mod tests {
 		assert_equal(result, VecDeque::from(vec!["a", "b", "c", ""]));
 	}
 
-	fn test_command() -> ReadCommand {
-		ReadCommand {
-			array_variable: None,
-			delimiter: None,
-			use_readline: false,
-			initial_text: None,
-			return_after_n_chars: None,
-			return_after_n_chars_no_delimiter: None,
-			prompt: None,
-			raw_mode: false,
-			silent: false,
-			timeout_in_seconds: None,
-			fd_num_to_read: None,
-			variable_names: Vec::new(),
-		}
-	}
-
 	#[test]
 	fn test_ensure_not_cancelled_returns_interrupted() {
-		let command = test_command();
 		let is_cancelled = || true;
 
-		let err = command
-			.ensure_not_cancelled(&is_cancelled)
-			.expect_err("cancelled state must interrupt read builtin");
+		let err = ReadCommand::ensure_not_cancelled(&is_cancelled)
+			.err()
+			.unwrap();
 		assert_eq!(err.to_string(), "interrupted");
 	}
 
 	#[cfg(unix)]
 	#[test]
 	fn test_wait_for_input_returns_interrupted_when_cancelled() {
-		let command = test_command();
-		let (reader, _writer) = std::io::pipe().expect("pipe creation must succeed");
+		let (reader, _writer) = std::io::pipe().unwrap();
 		let input_file = brush_core::openfiles::OpenFile::from(reader);
 		let is_cancelled = || true;
 
-		let err = command
-			.wait_for_input(&input_file, &is_cancelled)
-			.expect_err("cancelled state must interrupt input wait");
+		let err = ReadCommand::wait_for_input(&input_file, &is_cancelled)
+			.err()
+			.unwrap();
 		assert_eq!(err.to_string(), "interrupted");
 	}
 }

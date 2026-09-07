@@ -17,6 +17,7 @@
 //! Host-driven shell use — credential helpers, the interactive `xcsh shell`, snapshot sourcing —
 //! runs with no fence and is unaffected.
 
+use std::fmt::Write as _;
 use std::path::{Component, Path, PathBuf};
 
 /// The identity of a filesystem object, independent of the path used to reach it.
@@ -191,12 +192,12 @@ pub fn canonicalize_for_fence(candidate: &Path) -> PathBuf {
 impl ContainmentFence {
 	/// Whether this fence needs Linux Landlock rather than the in-process shell checks alone.
 	///
-	/// Landlock cannot express an exact directory-enumeration deny without also removing READ_DIR from
+	/// Landlock cannot express an exact directory-enumeration deny without also removing `READ_DIR` from
 	/// every ancestor. The production discovery-only fence therefore stays in-process on Linux: arming
 	/// Landlock for it broke `ls ~`, `ls /tmp`, `ls /`, PTYs, and setuid tools while buying no faithful
 	/// enforcement. Recursive and directional low-level policies still need the kernel backend.
 	#[must_use]
-	pub fn requires_landlock(&self) -> bool {
+	pub const fn requires_landlock(&self) -> bool {
 		!self.deny.is_empty() || !self.allow_read_only.is_empty() || !self.allow_write_only.is_empty()
 	}
 
@@ -365,7 +366,7 @@ enum RootKind {
 
 impl RootKind {
 	/// Whether a root of this kind grants `access`.
-	fn grants(self, access: FenceAccess) -> bool {
+	const fn grants(self, access: FenceAccess) -> bool {
 		match (self, access) {
 			(Self::Deny, _) => false,
 			(Self::Allow, _) => true,
@@ -382,7 +383,7 @@ impl RootKind {
 struct Node {
 	kind: Option<RootKind>,
 	deny_enumerate: bool,
-	kids: std::collections::BTreeMap<std::ffi::OsString, Node>,
+	kids: std::collections::BTreeMap<std::ffi::OsString, Self>,
 }
 
 impl Node {
@@ -474,9 +475,11 @@ impl ContainmentFence {
 				true,
 				access,
 				lister,
-				&mut granted,
-				&mut split_dirs,
-				&mut unenumerable,
+				&mut GrantWalkOutput {
+					granted: &mut granted,
+					split_dirs: &mut split_dirs,
+					unenumerable: &mut unenumerable,
+				},
 			);
 			for path in granted {
 				let rights = merged.entry(path).or_default();
@@ -527,6 +530,12 @@ impl ContainmentFence {
 	}
 }
 
+struct GrantWalkOutput<'a> {
+	granted: &'a mut Vec<PathBuf>,
+	split_dirs: &'a mut Vec<PathBuf>,
+	unenumerable: &'a mut Vec<PathBuf>,
+}
+
 /// Collect the grants for one direction, subtracting the denied subtrees.
 ///
 /// `inherited` starts `true` because the fence allows anything it does not mention.
@@ -536,9 +545,7 @@ fn walk_for_access(
 	inherited: bool,
 	access: FenceAccess,
 	lister: &dyn DirLister,
-	granted: &mut Vec<PathBuf>,
-	split_dirs: &mut Vec<PathBuf>,
-	unenumerable: &mut Vec<PathBuf>,
+	output: &mut GrantWalkOutput<'_>,
 ) {
 	let recursive = node.kind.map_or(inherited, |kind| kind.grants(access));
 	let here = recursive && !(access == FenceAccess::Enumerate && node.deny_enumerate);
@@ -546,7 +553,7 @@ fn walk_for_access(
 	// Uniform subtree: one rule settles it, and no directory has to be read.
 	if here == recursive && !node.subtree_differs(recursive, access) {
 		if here {
-			granted.push(path.to_path_buf());
+			output.granted.push(path.to_path_buf());
 		}
 		return;
 	}
@@ -554,30 +561,21 @@ fn walk_for_access(
 	if recursive {
 		// Granted here but not everywhere below, so this directory cannot be granted as a subtree.
 		// Grant the children that are not mentioned by the fence, and record what that costs.
-		split_dirs.push(path.to_path_buf());
+		output.split_dirs.push(path.to_path_buf());
 		match lister.entries(path) {
 			Ok(names) => {
 				for name in names {
 					if !node.kids.contains_key(&name) {
-						granted.push(path.join(name));
+						output.granted.push(path.join(name));
 					}
 				}
 			},
-			Err(_) => unenumerable.push(path.to_path_buf()),
+			Err(_) => output.unenumerable.push(path.to_path_buf()),
 		}
 	}
 
 	for (name, kid) in &node.kids {
-		walk_for_access(
-			kid,
-			&path.join(name),
-			recursive,
-			access,
-			lister,
-			granted,
-			split_dirs,
-			unenumerable,
-		);
+		walk_for_access(kid, &path.join(name), recursive, access, lister, output);
 	}
 }
 
@@ -669,40 +667,44 @@ impl ContainmentFence {
 
 		let mut profile = String::from("(version 1)\n(allow default)\n");
 		for rule in rules {
-			match rule {
-				Rule::Deny(root) => profile.push_str(&format!(
-					"(deny file-read* file-write* (subpath \"{}\"))\n",
+			let _ = match rule {
+				Rule::Deny(root) => writeln!(
+					profile,
+					"(deny file-read* file-write* (subpath \"{}\"))",
 					escape_for_profile(root)
-				)),
+				),
 				// Tools walk upward: `git init` stats every ancestor looking for a repository and an
 				// ownership marker, and refuses with "fatal: Invalid path" if it cannot. Verified that
 				// re-permitting metadata makes git work while contents AND directory listings stay
 				// denied — so a sibling's name is still not discoverable, only that the parent exists.
-				Rule::Metadata(root) => profile.push_str(&format!(
-					"(allow file-read-metadata (subpath \"{}\"))\n",
+				Rule::Metadata(root) => writeln!(
+					profile,
+					"(allow file-read-metadata (subpath \"{}\"))",
 					escape_for_profile(root)
-				)),
+				),
 				// A literal `file-read-data` denial prevents `readdir` on this directory but does not
 				// cover a named child. Traversal, metadata, and reads below a known child stay allowed.
-				Rule::DenyEnumerate(root) => profile.push_str(&format!(
-					"(deny file-read-data (literal \"{}\"))\n",
+				Rule::DenyEnumerate(root) => {
+					writeln!(profile, "(deny file-read-data (literal \"{}\"))", escape_for_profile(root))
+				},
+				Rule::Allow(root) => writeln!(
+					profile,
+					"(allow file-read* file-write* (subpath \"{}\"))",
 					escape_for_profile(root)
-				)),
-				Rule::Allow(root) => profile.push_str(&format!(
-					"(allow file-read* file-write* (subpath \"{}\"))\n",
-					escape_for_profile(root)
-				)),
-				Rule::ReadOnly(root) => profile.push_str(&format!(
-					"(allow file-read* (subpath \"{}\"))\n(deny file-write* (subpath \"{}\"))\n",
+				),
+				Rule::ReadOnly(root) => writeln!(
+					profile,
+					"(allow file-read* (subpath \"{}\"))\n(deny file-write* (subpath \"{}\"))",
 					escape_for_profile(root),
 					escape_for_profile(root)
-				)),
-				Rule::WriteOnly(root) => profile.push_str(&format!(
-					"(allow file-write* (subpath \"{}\"))\n(deny file-read* (subpath \"{}\"))\n",
+				),
+				Rule::WriteOnly(root) => writeln!(
+					profile,
+					"(allow file-write* (subpath \"{}\"))\n(deny file-read* (subpath \"{}\"))",
 					escape_for_profile(root),
 					escape_for_profile(root)
-				)),
-			}
+				),
+			};
 		}
 		profile
 	}

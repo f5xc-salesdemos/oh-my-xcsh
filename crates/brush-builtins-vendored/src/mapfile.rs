@@ -47,36 +47,38 @@ pub(crate) struct MapFileCommand {
 impl builtins::Command for MapFileCommand {
 	type Error = brush_core::Error;
 
-	async fn execute(
+	fn execute(
 		&self,
 		context: brush_core::ExecutionContext<'_>,
-	) -> Result<brush_core::ExecutionResult, Self::Error> {
-		if self.origin != 0 {
-			// This will require merging into a potentially already-existing array.
-			return error::unimp("mapfile -O is not yet implemented");
-		}
+	) -> impl Future<Output = Result<brush_core::ExecutionResult, Self::Error>> {
+		futures::future::lazy(move |_| {
+			if self.origin != 0 {
+				// This will require merging into a potentially already-existing array.
+				return error::unimp("mapfile -O is not yet implemented");
+			}
 
-		if self.callback_group_size != 5000 || self.callback.is_some() {
-			return error::unimp("mapfile -C/-c is not yet implemented");
-		}
+			if self.callback_group_size != 5000 || self.callback.is_some() {
+				return error::unimp("mapfile -C/-c is not yet implemented");
+			}
 
-		let input_file = context
-			.try_fd(self.fd)
-			.ok_or_else(|| ErrorKind::BadFileDescriptor(self.fd))?;
+			let input_file = context
+				.try_fd(self.fd)
+				.ok_or_else(|| ErrorKind::BadFileDescriptor(self.fd))?;
 
-		// Read!
-		let results = self.read_entries(input_file)?;
+			// Read!
+			let results = self.read_entries(input_file)?;
 
-		// Assign!
-		context.shell.env.update_or_add(
-			&self.array_var_name,
-			variables::ShellValueLiteral::Array(results),
-			|_| Ok(()),
-			env::EnvironmentLookup::Anywhere,
-			env::EnvironmentScope::Global,
-		)?;
+			// Assign!
+			context.shell.env.update_or_add(
+				&self.array_var_name,
+				variables::ShellValueLiteral::Array(results),
+				|_| Ok(()),
+				env::EnvironmentLookup::Anywhere,
+				env::EnvironmentScope::Global,
+			)?;
 
-		Ok(ExecutionResult::success())
+			Ok(ExecutionResult::success())
+		})
 	}
 }
 

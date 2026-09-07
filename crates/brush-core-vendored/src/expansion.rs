@@ -819,223 +819,59 @@ impl<'a> WordExpander<'a> {
 		&mut self,
 		expr: brush_parser::word::ParameterExpr,
 	) -> Result<Expansion, error::Error> {
-		#[expect(clippy::cast_possible_truncation)]
+		use brush_parser::word::ParameterExpr as P;
 		match expr {
-			brush_parser::word::ParameterExpr::Parameter { parameter, indirect } => {
-				self.expand_parameter(&parameter, indirect).await
+			P::Parameter { parameter, indirect } => self.expand_parameter(&parameter, indirect).await,
+			P::UseDefaultValues { parameter, indirect, test_type, default_value } => {
+				self
+					.expand_use_default_values(parameter, indirect, test_type, default_value)
+					.await
 			},
-			brush_parser::word::ParameterExpr::UseDefaultValues {
-				parameter,
-				indirect,
-				test_type,
-				default_value,
-			} => {
-				let expanded_parameter = self.expand_parameter(&parameter, indirect).await?;
-				let default_value = default_value.as_ref().map_or_else(|| "", |v| v.as_str());
-
-				match (test_type, expanded_parameter.classify()) {
-					(_, ParameterState::NonZeroLength)
-					| (
-						brush_parser::word::ParameterTestType::Unset,
-						ParameterState::DefinedEmptyString,
-					) => Ok(expanded_parameter),
-					_ => Ok(self.expand_parameter_word(default_value).await?),
-				}
+			P::AssignDefaultValues { parameter, indirect, test_type, default_value } => {
+				self
+					.expand_assign_default_values(parameter, indirect, test_type, default_value)
+					.await
 			},
-			brush_parser::word::ParameterExpr::AssignDefaultValues {
-				parameter,
-				indirect,
-				test_type,
-				default_value,
-			} => {
-				let expanded_parameter = self.expand_parameter(&parameter, indirect).await?;
-				let default_value = default_value.as_ref().map_or_else(|| "", |v| v.as_str());
-
-				match (test_type, expanded_parameter.classify()) {
-					(_, ParameterState::NonZeroLength)
-					| (
-						brush_parser::word::ParameterTestType::Unset,
-						ParameterState::DefinedEmptyString,
-					) => Ok(expanded_parameter),
-					_ => {
-						let expanded_default_value =
-							String::from(self.expand_parameter_word(default_value).await?);
-						self
-							.assign_to_parameter(&parameter, expanded_default_value.clone())
-							.await?;
-						Ok(Expansion::from(expanded_default_value))
-					},
-				}
+			P::IndicateErrorIfNullOrUnset { parameter, indirect, test_type, error_message } => {
+				self
+					.expand_checked_parameter(parameter, indirect, test_type, error_message)
+					.await
 			},
-			brush_parser::word::ParameterExpr::IndicateErrorIfNullOrUnset {
-				parameter,
-				indirect,
-				test_type,
-				error_message,
-			} => {
-				let expanded_parameter = self.expand_parameter(&parameter, indirect).await?;
-				let error_message = error_message.as_ref().map_or_else(|| "", |v| v.as_str());
-
-				match (test_type, expanded_parameter.classify()) {
-					(_, ParameterState::NonZeroLength)
-					| (
-						brush_parser::word::ParameterTestType::Unset,
-						ParameterState::DefinedEmptyString,
-					) => Ok(expanded_parameter),
-					_ => Err(
-						error::ErrorKind::CheckedExpansionError(
-							self.basic_expand_to_str(error_message).await?,
-						)
-						.into(),
-					),
-				}
+			P::UseAlternativeValue { parameter, indirect, test_type, alternative_value } => {
+				self
+					.expand_use_alternative_value(parameter, indirect, test_type, alternative_value)
+					.await
 			},
-			brush_parser::word::ParameterExpr::UseAlternativeValue {
-				parameter,
-				indirect,
-				test_type,
-				alternative_value,
-			} => {
-				let expanded_parameter = self.expand_parameter(&parameter, indirect).await?;
-				let alternative_value = alternative_value
-					.as_ref()
-					.map_or_else(|| "", |v| v.as_str());
-
-				match (test_type, expanded_parameter.classify()) {
-					(_, ParameterState::NonZeroLength)
-					| (
-						brush_parser::word::ParameterTestType::Unset,
-						ParameterState::DefinedEmptyString,
-					) => Ok(self.expand_parameter_word(alternative_value).await?),
-					_ => Ok(Expansion::from(String::new())),
-				}
-			},
-			brush_parser::word::ParameterExpr::ParameterLength { parameter, indirect } => {
+			P::ParameterLength { parameter, indirect } => {
 				let expansion = self.expand_parameter(&parameter, indirect).await?;
 				Ok(Expansion::from(expansion.polymorphic_len().to_string()))
 			},
-			brush_parser::word::ParameterExpr::RemoveSmallestSuffixPattern {
-				parameter,
-				indirect,
-				pattern,
-			} => {
-				let expanded_parameter = self.expand_parameter(&parameter, indirect).await?;
-				let expanded_pattern = self.basic_expand_opt_pattern(&pattern).await?;
-				transform_expansion(expanded_parameter, async |s| {
-					patterns::remove_smallest_matching_suffix(s.as_str(), &expanded_pattern)
-						.map(|s| s.to_owned())
-				})
-				.await
+			P::RemoveSmallestSuffixPattern { parameter, indirect, pattern } => {
+				self
+					.remove_smallest_suffix(parameter, indirect, pattern)
+					.await
 			},
-			brush_parser::word::ParameterExpr::RemoveLargestSuffixPattern {
-				parameter,
-				indirect,
-				pattern,
-			} => {
-				let expanded_parameter = self.expand_parameter(&parameter, indirect).await?;
-				let expanded_pattern = self.basic_expand_opt_pattern(&pattern).await?;
-				transform_expansion(expanded_parameter, async |s| {
-					patterns::remove_largest_matching_suffix(s.as_str(), &expanded_pattern)
-						.map(|s| s.to_owned())
-				})
-				.await
+			P::RemoveLargestSuffixPattern { parameter, indirect, pattern } => {
+				self
+					.remove_largest_suffix(parameter, indirect, pattern)
+					.await
 			},
-			brush_parser::word::ParameterExpr::RemoveSmallestPrefixPattern {
-				parameter,
-				indirect,
-				pattern,
-			} => {
-				let expanded_parameter = self.expand_parameter(&parameter, indirect).await?;
-				let expanded_pattern = self.basic_expand_opt_pattern(&pattern).await?;
-
-				transform_expansion(expanded_parameter, async |s| {
-					patterns::remove_smallest_matching_prefix(s.as_str(), &expanded_pattern)
-						.map(|s| s.to_owned())
-				})
-				.await
+			P::RemoveSmallestPrefixPattern { parameter, indirect, pattern } => {
+				self
+					.remove_smallest_prefix(parameter, indirect, pattern)
+					.await
 			},
-			brush_parser::word::ParameterExpr::RemoveLargestPrefixPattern {
-				parameter,
-				indirect,
-				pattern,
-			} => {
-				let expanded_parameter = self.expand_parameter(&parameter, indirect).await?;
-				let expanded_pattern = self.basic_expand_opt_pattern(&pattern).await?;
-
-				transform_expansion(expanded_parameter, async |s| {
-					patterns::remove_largest_matching_prefix(s.as_str(), &expanded_pattern)
-						.map(|s| s.to_owned())
-				})
-				.await
+			P::RemoveLargestPrefixPattern { parameter, indirect, pattern } => {
+				self
+					.remove_largest_prefix(parameter, indirect, pattern)
+					.await
 			},
-			brush_parser::word::ParameterExpr::Substring { parameter, indirect, offset, length } => {
-				let mut expanded_parameter = self.expand_parameter(&parameter, indirect).await?;
-
-				// If this is ${@:...} then make sure $0 is in the array being sliced.
-				if matches!(
-					parameter,
-					brush_parser::word::Parameter::Special(
-						brush_parser::word::SpecialParameter::AllPositionalParameters { concatenate: _ },
-					)
-				) {
-					let shell_name = self
-						.shell
-						.shell_name
-						.as_ref()
-						.map_or_else(|| "", |name| name.as_str());
-
-					expanded_parameter
-						.fields
-						.insert(0, WordField::from(ExpansionPiece::Splittable(shell_name.to_owned())));
-				}
-
-				#[expect(clippy::cast_possible_wrap)]
-				let expanded_parameter_len = expanded_parameter.polymorphic_len() as i64;
-
-				let mut expanded_offset = offset.eval(self.shell, self.params, false).await?;
-				if expanded_offset < 0 {
-					// For arrays--and only arrays--we handle negative indexes as offsets from the
-					// end of the array, with -1 referencing the last element of
-					// the array.
-					if expanded_parameter.from_array {
-						expanded_offset += expanded_parameter_len;
-
-						// If the offset is still negative, then we need to yield an empty slice.
-						// We force the offset to the end of the array.
-						if expanded_offset < 0 {
-							expanded_offset = expanded_parameter_len;
-						}
-					} else {
-						// For other values, we just treat negative indexes as 0.
-						expanded_offset = 0;
-					}
-				}
-
-				// Make sure the offset is within the bounds of the array.
-				let expanded_offset = min(expanded_offset, expanded_parameter_len);
-
-				let end_offset = if let Some(length) = length {
-					let mut expanded_length = length.eval(self.shell, self.params, false).await?;
-					if expanded_length < 0 {
-						expanded_length += expanded_parameter_len;
-					}
-
-					let expanded_length = min(expanded_length, expanded_parameter_len - expanded_offset);
-
-					expanded_offset + expanded_length
-				} else {
-					expanded_parameter_len
-				};
-
-				#[expect(clippy::cast_sign_loss)]
-				Ok(expanded_parameter
-					.polymorphic_subslice(expanded_offset as usize, end_offset as usize))
+			P::Substring { parameter, indirect, offset, length } => {
+				self
+					.expand_substring(parameter, indirect, offset, length)
+					.await
 			},
-			brush_parser::word::ParameterExpr::Transform {
-				parameter,
-				indirect,
-				op: ParameterTransformOp::ToAttributeFlags,
-			} => {
+			P::Transform { parameter, indirect, op: ParameterTransformOp::ToAttributeFlags } => {
 				if let (_, _, Some(var)) = self
 					.try_resolve_parameter_to_variable(&parameter, indirect)
 					.await?
@@ -1045,24 +881,341 @@ impl<'a> WordExpander<'a> {
 					Ok(String::new().into())
 				}
 			},
-			brush_parser::word::ParameterExpr::Transform {
-				parameter,
-				indirect,
-				op: ParameterTransformOp::ToAssignmentLogic,
-			} => {
-				if let (Some(name), index, Some(var)) = self
-					.try_resolve_parameter_to_variable(&parameter, indirect)
-					.await?
-				{
-					let assignable_value_str =
-						var.value().to_assignable_str(index.as_deref(), self.shell);
+			P::Transform { parameter, indirect, op: ParameterTransformOp::ToAssignmentLogic } => {
+				self
+					.expand_transform_to_assignment_logic(parameter, indirect)
+					.await
+			},
+			P::Transform { parameter, indirect, op } => {
+				self.expand_transform(parameter, indirect, op).await
+			},
+			P::UppercaseFirstChar { parameter, indirect, pattern } => {
+				self
+					.expand_uppercase_first_char(parameter, indirect, pattern)
+					.await
+			},
+			P::UppercasePattern { parameter, indirect, pattern } => {
+				self.uppercase(parameter, indirect, pattern).await
+			},
+			P::LowercaseFirstChar { parameter, indirect, pattern } => {
+				self
+					.expand_lowercase_first_char(parameter, indirect, pattern)
+					.await
+			},
+			P::LowercasePattern { parameter, indirect, pattern } => {
+				self.lowercase(parameter, indirect, pattern).await
+			},
+			P::ReplaceSubstring { parameter, indirect, pattern, replacement, match_kind } => {
+				self
+					.expand_replace_substring(parameter, indirect, pattern, replacement, match_kind)
+					.await
+			},
+			P::VariableNames { prefix, concatenate } => {
+				Ok(self.expand_variable_names(&prefix, concatenate))
+			},
+			P::MemberKeys { variable_name, concatenate } => {
+				Ok(self.expand_member_keys(variable_name, concatenate))
+			},
+		}
+	}
 
-					let mut attr_str = var.attribute_flags(self.shell);
-					if attr_str.is_empty() {
-						attr_str.push('-');
-					}
+	async fn remove_smallest_suffix(
+		&mut self,
+		parameter: brush_parser::word::Parameter,
+		indirect: bool,
+		pattern: Option<String>,
+	) -> Result<Expansion, error::Error> {
+		let expanded_parameter = self.expand_parameter(&parameter, indirect).await?;
+		let expanded_pattern = self.basic_expand_opt_pattern(&pattern).await?;
+		transform_expansion(expanded_parameter, async |s| {
+			patterns::remove_smallest_matching_suffix(s.as_str(), &expanded_pattern)
+				.map(|s| s.to_owned())
+		})
+		.await
+	}
 
-					match var.value() {
+	async fn remove_largest_suffix(
+		&mut self,
+		parameter: brush_parser::word::Parameter,
+		indirect: bool,
+		pattern: Option<String>,
+	) -> Result<Expansion, error::Error> {
+		let expanded_parameter = self.expand_parameter(&parameter, indirect).await?;
+		let expanded_pattern = self.basic_expand_opt_pattern(&pattern).await?;
+		transform_expansion(expanded_parameter, async |s| {
+			patterns::remove_largest_matching_suffix(s.as_str(), &expanded_pattern)
+				.map(|s| s.to_owned())
+		})
+		.await
+	}
+
+	async fn remove_smallest_prefix(
+		&mut self,
+		parameter: brush_parser::word::Parameter,
+		indirect: bool,
+		pattern: Option<String>,
+	) -> Result<Expansion, error::Error> {
+		let expanded_parameter = self.expand_parameter(&parameter, indirect).await?;
+		let expanded_pattern = self.basic_expand_opt_pattern(&pattern).await?;
+
+		transform_expansion(expanded_parameter, async |s| {
+			patterns::remove_smallest_matching_prefix(s.as_str(), &expanded_pattern)
+				.map(|s| s.to_owned())
+		})
+		.await
+	}
+
+	async fn remove_largest_prefix(
+		&mut self,
+		parameter: brush_parser::word::Parameter,
+		indirect: bool,
+		pattern: Option<String>,
+	) -> Result<Expansion, error::Error> {
+		let expanded_parameter = self.expand_parameter(&parameter, indirect).await?;
+		let expanded_pattern = self.basic_expand_opt_pattern(&pattern).await?;
+
+		transform_expansion(expanded_parameter, async |s| {
+			patterns::remove_largest_matching_prefix(s.as_str(), &expanded_pattern)
+				.map(|s| s.to_owned())
+		})
+		.await
+	}
+
+	async fn expand_uppercase_first_char(
+		&mut self,
+		parameter: brush_parser::word::Parameter,
+		indirect: bool,
+		pattern: Option<String>,
+	) -> Result<Expansion, error::Error> {
+		let expanded_parameter = self.expand_parameter(&parameter, indirect).await?;
+		let expanded_pattern = self.basic_expand_opt_pattern(&pattern).await?;
+
+		transform_expansion(expanded_parameter, async |s| {
+			Self::uppercase_first_char(s, &expanded_pattern)
+		})
+		.await
+	}
+
+	async fn uppercase(
+		&mut self,
+		parameter: brush_parser::word::Parameter,
+		indirect: bool,
+		pattern: Option<String>,
+	) -> Result<Expansion, error::Error> {
+		let expanded_parameter = self.expand_parameter(&parameter, indirect).await?;
+		let expanded_pattern = self.basic_expand_opt_pattern(&pattern).await?;
+
+		transform_expansion(expanded_parameter, async |s| {
+			Self::uppercase_pattern(s.as_str(), &expanded_pattern)
+		})
+		.await
+	}
+
+	async fn expand_lowercase_first_char(
+		&mut self,
+		parameter: brush_parser::word::Parameter,
+		indirect: bool,
+		pattern: Option<String>,
+	) -> Result<Expansion, error::Error> {
+		let expanded_parameter = self.expand_parameter(&parameter, indirect).await?;
+		let expanded_pattern = self.basic_expand_opt_pattern(&pattern).await?;
+
+		transform_expansion(expanded_parameter, async |s| {
+			Self::lowercase_first_char(s, &expanded_pattern)
+		})
+		.await
+	}
+
+	async fn lowercase(
+		&mut self,
+		parameter: brush_parser::word::Parameter,
+		indirect: bool,
+		pattern: Option<String>,
+	) -> Result<Expansion, error::Error> {
+		let expanded_parameter = self.expand_parameter(&parameter, indirect).await?;
+		let expanded_pattern = self.basic_expand_opt_pattern(&pattern).await?;
+
+		transform_expansion(expanded_parameter, async |s| {
+			Self::lowercase_pattern(s.as_str(), &expanded_pattern)
+		})
+		.await
+	}
+
+	async fn expand_use_default_values(
+		&mut self,
+		parameter: brush_parser::word::Parameter,
+		indirect: bool,
+		test_type: brush_parser::word::ParameterTestType,
+		default_value: Option<String>,
+	) -> Result<Expansion, error::Error> {
+		let expanded_parameter = self.expand_parameter(&parameter, indirect).await?;
+		let default_value = default_value.as_ref().map_or_else(|| "", |v| v.as_str());
+
+		match (test_type, expanded_parameter.classify()) {
+			(_, ParameterState::NonZeroLength)
+			| (brush_parser::word::ParameterTestType::Unset, ParameterState::DefinedEmptyString) => {
+				Ok(expanded_parameter)
+			},
+			_ => Ok(self.expand_parameter_word(default_value).await?),
+		}
+	}
+
+	async fn expand_assign_default_values(
+		&mut self,
+		parameter: brush_parser::word::Parameter,
+		indirect: bool,
+		test_type: brush_parser::word::ParameterTestType,
+		default_value: Option<String>,
+	) -> Result<Expansion, error::Error> {
+		let expanded_parameter = self.expand_parameter(&parameter, indirect).await?;
+		let default_value = default_value.as_ref().map_or_else(|| "", |v| v.as_str());
+
+		match (test_type, expanded_parameter.classify()) {
+			(_, ParameterState::NonZeroLength)
+			| (brush_parser::word::ParameterTestType::Unset, ParameterState::DefinedEmptyString) => {
+				Ok(expanded_parameter)
+			},
+			_ => {
+				let expanded_default_value =
+					String::from(self.expand_parameter_word(default_value).await?);
+				self
+					.assign_to_parameter(&parameter, expanded_default_value.clone())
+					.await?;
+				Ok(Expansion::from(expanded_default_value))
+			},
+		}
+	}
+
+	async fn expand_checked_parameter(
+		&mut self,
+		parameter: brush_parser::word::Parameter,
+		indirect: bool,
+		test_type: brush_parser::word::ParameterTestType,
+		error_message: Option<String>,
+	) -> Result<Expansion, error::Error> {
+		let expanded_parameter = self.expand_parameter(&parameter, indirect).await?;
+		let error_message = error_message.as_ref().map_or_else(|| "", |v| v.as_str());
+
+		match (test_type, expanded_parameter.classify()) {
+			(_, ParameterState::NonZeroLength)
+			| (brush_parser::word::ParameterTestType::Unset, ParameterState::DefinedEmptyString) => {
+				Ok(expanded_parameter)
+			},
+			_ => Err(
+				error::ErrorKind::CheckedExpansionError(self.basic_expand_to_str(error_message).await?)
+					.into(),
+			),
+		}
+	}
+
+	async fn expand_use_alternative_value(
+		&mut self,
+		parameter: brush_parser::word::Parameter,
+		indirect: bool,
+		test_type: brush_parser::word::ParameterTestType,
+		alternative_value: Option<String>,
+	) -> Result<Expansion, error::Error> {
+		let expanded_parameter = self.expand_parameter(&parameter, indirect).await?;
+		let alternative_value = alternative_value
+			.as_ref()
+			.map_or_else(|| "", |v| v.as_str());
+
+		match (test_type, expanded_parameter.classify()) {
+			(_, ParameterState::NonZeroLength)
+			| (brush_parser::word::ParameterTestType::Unset, ParameterState::DefinedEmptyString) => {
+				Ok(self.expand_parameter_word(alternative_value).await?)
+			},
+			_ => Ok(Expansion::from(String::new())),
+		}
+	}
+
+	#[expect(clippy::cast_possible_truncation)]
+	async fn expand_substring(
+		&mut self,
+		parameter: brush_parser::word::Parameter,
+		indirect: bool,
+		offset: brush_parser::ast::UnexpandedArithmeticExpr,
+		length: Option<brush_parser::ast::UnexpandedArithmeticExpr>,
+	) -> Result<Expansion, error::Error> {
+		let mut expanded_parameter = self.expand_parameter(&parameter, indirect).await?;
+
+		// If this is ${@:...} then make sure $0 is in the array being sliced.
+		if matches!(
+			parameter,
+			brush_parser::word::Parameter::Special(
+				brush_parser::word::SpecialParameter::AllPositionalParameters { concatenate: _ },
+			)
+		) {
+			let shell_name = self
+				.shell
+				.shell_name
+				.as_ref()
+				.map_or_else(|| "", |name| name.as_str());
+
+			expanded_parameter
+				.fields
+				.insert(0, WordField::from(ExpansionPiece::Splittable(shell_name.to_owned())));
+		}
+
+		#[expect(clippy::cast_possible_wrap)]
+		let expanded_parameter_len = expanded_parameter.polymorphic_len() as i64;
+
+		let mut expanded_offset = offset.eval(self.shell, self.params, false).await?;
+		if expanded_offset < 0 {
+			// For arrays--and only arrays--we handle negative indexes as offsets from the
+			// end of the array, with -1 referencing the last element of
+			// the array.
+			if expanded_parameter.from_array {
+				expanded_offset += expanded_parameter_len;
+
+				// If the offset is still negative, then we need to yield an empty slice.
+				// We force the offset to the end of the array.
+				if expanded_offset < 0 {
+					expanded_offset = expanded_parameter_len;
+				}
+			} else {
+				// For other values, we just treat negative indexes as 0.
+				expanded_offset = 0;
+			}
+		}
+
+		// Make sure the offset is within the bounds of the array.
+		let expanded_offset = min(expanded_offset, expanded_parameter_len);
+
+		let end_offset = if let Some(length) = length {
+			let mut expanded_length = length.eval(self.shell, self.params, false).await?;
+			if expanded_length < 0 {
+				expanded_length += expanded_parameter_len;
+			}
+
+			let expanded_length = min(expanded_length, expanded_parameter_len - expanded_offset);
+
+			expanded_offset + expanded_length
+		} else {
+			expanded_parameter_len
+		};
+
+		#[expect(clippy::cast_sign_loss)]
+		Ok(expanded_parameter.polymorphic_subslice(expanded_offset as usize, end_offset as usize))
+	}
+
+	async fn expand_transform_to_assignment_logic(
+		&mut self,
+		parameter: brush_parser::word::Parameter,
+		indirect: bool,
+	) -> Result<Expansion, error::Error> {
+		if let (Some(name), index, Some(var)) = self
+			.try_resolve_parameter_to_variable(&parameter, indirect)
+			.await?
+		{
+			let assignable_value_str = var.value().to_assignable_str(index.as_deref(), self.shell);
+
+			let mut attr_str = var.attribute_flags(self.shell);
+			if attr_str.is_empty() {
+				attr_str.push('-');
+			}
+
+			match var.value() {
                         ShellValue::IndexedArray(_)
                         | ShellValue::AssociativeArray(_)
                         // TODO(dynamic): confirm this
@@ -1079,153 +1232,120 @@ impl<'a> WordExpander<'a> {
                             .into())
                         }
                         ShellValue::String(_) => {
-                            Ok(std::format!("{name}={assignable_value_str}",).into())
+                            Ok(std::format!("{name}={assignable_value_str}").into())
                         }
                         ShellValue::Unset(_) => {
                             Ok(std::format!("declare -{attr_str} {name}").into())
                         }
                     }
-				} else {
-					Ok(String::new().into())
-				}
-			},
-			brush_parser::word::ParameterExpr::Transform { parameter, indirect, op } => {
-				let expanded_parameter = self.expand_parameter(&parameter, indirect).await?;
-				let came_from_undefined = expanded_parameter.undefined;
+		} else {
+			Ok(String::new().into())
+		}
+	}
 
-				//
-				// For typing reasons (issues with FnMut and our mut use of self), we can't use
-				// transform_expansion. Instead, we inline its logic here.
-				//
+	async fn expand_transform(
+		&mut self,
+		parameter: brush_parser::word::Parameter,
+		indirect: bool,
+		op: ParameterTransformOp,
+	) -> Result<Expansion, error::Error> {
+		let expanded_parameter = self.expand_parameter(&parameter, indirect).await?;
+		let came_from_undefined = expanded_parameter.undefined;
 
-				let mut transformed_fields = vec![];
-				for field in expanded_parameter.fields {
-					let s = String::from(field);
-					let transformed = self.apply_transform_to(&op, s, came_from_undefined).await?;
-					transformed_fields.push(WordField::from(transformed));
-				}
+		//
+		// For typing reasons (issues with FnMut and our mut use of self), we can't use
+		// transform_expansion. Instead, we inline its logic here.
+		//
 
-				Ok(Expansion {
-					fields: transformed_fields,
-					concatenate: expanded_parameter.concatenate,
-					from_array: expanded_parameter.from_array,
-					undefined: expanded_parameter.undefined,
+		let mut transformed_fields = vec![];
+		for field in expanded_parameter.fields {
+			let s = String::from(field);
+			let transformed = self.apply_transform_to(&op, s, came_from_undefined).await?;
+			transformed_fields.push(WordField::from(transformed));
+		}
+
+		Ok(Expansion {
+			fields: transformed_fields,
+			concatenate: expanded_parameter.concatenate,
+			from_array: expanded_parameter.from_array,
+			undefined: expanded_parameter.undefined,
+		})
+	}
+
+	async fn expand_replace_substring(
+		&mut self,
+		parameter: brush_parser::word::Parameter,
+		indirect: bool,
+		pattern: String,
+		replacement: Option<String>,
+		match_kind: brush_parser::word::SubstringMatchKind,
+	) -> Result<Expansion, error::Error> {
+		let expanded_parameter = self.expand_parameter(&parameter, indirect).await?;
+		let expanded_pattern = self
+			.basic_expand_pattern(pattern.as_str())
+			.await?
+			.set_extended_globbing(self.parser_options.enable_extended_globbing)
+			.set_case_insensitive(self.shell.options.case_insensitive_conditionals);
+
+		// If no replacement was provided, then we replace with an empty string.
+		let replacement = replacement.unwrap_or_default();
+		let expanded_replacement = self.basic_expand_to_str(&replacement).await?;
+
+		let regex = expanded_pattern.to_regex(
+			matches!(match_kind, brush_parser::word::SubstringMatchKind::Prefix),
+			matches!(match_kind, brush_parser::word::SubstringMatchKind::Suffix),
+		)?;
+
+		transform_expansion(expanded_parameter, async |s| {
+			Ok(Self::replace_substring(s.as_str(), &regex, expanded_replacement.as_str(), &match_kind))
+		})
+		.await
+	}
+
+	fn expand_variable_names(&self, prefix: &str, concatenate: bool) -> Expansion {
+		if prefix.is_empty() {
+			Expansion::from(String::new())
+		} else {
+			let matching_names = self
+				.shell
+				.env
+				.iter()
+				.filter_map(|(name, _)| {
+					if name.starts_with(prefix) {
+						Some(name.to_owned())
+					} else {
+						None
+					}
 				})
-			},
-			brush_parser::word::ParameterExpr::UppercaseFirstChar { parameter, indirect, pattern } => {
-				let expanded_parameter = self.expand_parameter(&parameter, indirect).await?;
-				let expanded_pattern = self.basic_expand_opt_pattern(&pattern).await?;
+				.sorted();
 
-				transform_expansion(expanded_parameter, async |s| {
-					Self::uppercase_first_char(s, &expanded_pattern)
-				})
-				.await
-			},
-			brush_parser::word::ParameterExpr::UppercasePattern { parameter, indirect, pattern } => {
-				let expanded_parameter = self.expand_parameter(&parameter, indirect).await?;
-				let expanded_pattern = self.basic_expand_opt_pattern(&pattern).await?;
+			Expansion {
+				fields: matching_names
+					.into_iter()
+					.map(|name| WordField(vec![ExpansionPiece::Splittable(name)]))
+					.collect(),
+				concatenate,
+				from_array: true,
+				undefined: false,
+			}
+		}
+	}
 
-				transform_expansion(expanded_parameter, async |s| {
-					Self::uppercase_pattern(s.as_str(), &expanded_pattern)
-				})
-				.await
-			},
-			brush_parser::word::ParameterExpr::LowercaseFirstChar { parameter, indirect, pattern } => {
-				let expanded_parameter = self.expand_parameter(&parameter, indirect).await?;
-				let expanded_pattern = self.basic_expand_opt_pattern(&pattern).await?;
+	fn expand_member_keys(&self, variable_name: String, concatenate: bool) -> Expansion {
+		let keys = if let Some((_, var)) = self.shell.env.get(variable_name) {
+			var.value().element_keys(self.shell)
+		} else {
+			vec![]
+		};
 
-				transform_expansion(expanded_parameter, async |s| {
-					Self::lowercase_first_char(s, &expanded_pattern)
-				})
-				.await
-			},
-			brush_parser::word::ParameterExpr::LowercasePattern { parameter, indirect, pattern } => {
-				let expanded_parameter = self.expand_parameter(&parameter, indirect).await?;
-				let expanded_pattern = self.basic_expand_opt_pattern(&pattern).await?;
-
-				transform_expansion(expanded_parameter, async |s| {
-					Self::lowercase_pattern(s.as_str(), &expanded_pattern)
-				})
-				.await
-			},
-			brush_parser::word::ParameterExpr::ReplaceSubstring {
-				parameter,
-				indirect,
-				pattern,
-				replacement,
-				match_kind,
-			} => {
-				let expanded_parameter = self.expand_parameter(&parameter, indirect).await?;
-				let expanded_pattern = self
-					.basic_expand_pattern(pattern.as_str())
-					.await?
-					.set_extended_globbing(self.parser_options.enable_extended_globbing)
-					.set_case_insensitive(self.shell.options.case_insensitive_conditionals);
-
-				// If no replacement was provided, then we replace with an empty string.
-				let replacement = replacement.unwrap_or(String::new());
-				let expanded_replacement = self.basic_expand_to_str(&replacement).await?;
-
-				let regex = expanded_pattern.to_regex(
-					matches!(match_kind, brush_parser::word::SubstringMatchKind::Prefix),
-					matches!(match_kind, brush_parser::word::SubstringMatchKind::Suffix),
-				)?;
-
-				transform_expansion(expanded_parameter, async |s| {
-					Ok(Self::replace_substring(
-						s.as_str(),
-						&regex,
-						expanded_replacement.as_str(),
-						&match_kind,
-					))
-				})
-				.await
-			},
-			brush_parser::word::ParameterExpr::VariableNames { prefix, concatenate } => {
-				if prefix.is_empty() {
-					Ok(Expansion::from(String::new()))
-				} else {
-					let matching_names = self
-						.shell
-						.env
-						.iter()
-						.filter_map(|(name, _)| {
-							if name.starts_with(prefix.as_str()) {
-								Some(name.to_owned())
-							} else {
-								None
-							}
-						})
-						.sorted();
-
-					Ok(Expansion {
-						fields: matching_names
-							.into_iter()
-							.map(|name| WordField(vec![ExpansionPiece::Splittable(name)]))
-							.collect(),
-						concatenate,
-						from_array: true,
-						undefined: false,
-					})
-				}
-			},
-			brush_parser::word::ParameterExpr::MemberKeys { variable_name, concatenate } => {
-				let keys = if let Some((_, var)) = self.shell.env.get(variable_name) {
-					var.value().element_keys(self.shell)
-				} else {
-					vec![]
-				};
-
-				Ok(Expansion {
-					fields: keys
-						.into_iter()
-						.map(|key| WordField(vec![ExpansionPiece::Splittable(key)]))
-						.collect(),
-					concatenate,
-					from_array: true,
-					undefined: false,
-				})
-			},
+		Expansion {
+			fields: keys
+				.into_iter()
+				.map(|key| WordField(vec![ExpansionPiece::Splittable(key)]))
+				.collect(),
+			concatenate,
+			from_array: true,
+			undefined: false,
 		}
 	}
 

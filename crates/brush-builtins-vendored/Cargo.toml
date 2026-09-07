@@ -331,3 +331,7 @@ priority = -1
 # crate is reached through [patch.crates-io] and is never a workspace member, so an empty table is
 # the accurate statement as well as the fix.
 [workspace]
+
+# Standalone checks must use the same patched shell API as the root workspace.
+[patch.crates-io]
+brush-core = { path = "../brush-core-vendored" }

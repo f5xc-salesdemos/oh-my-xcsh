@@ -13,30 +13,37 @@ pub(crate) struct BgCommand {
 impl builtins::Command for BgCommand {
 	type Error = brush_core::Error;
 
-	async fn execute(
+	fn execute(
 		&self,
 		context: brush_core::ExecutionContext<'_>,
-	) -> Result<brush_core::ExecutionResult, Self::Error> {
-		let mut exit_code = ExecutionResult::success();
+	) -> impl Future<Output = Result<brush_core::ExecutionResult, Self::Error>> {
+		futures::future::lazy(move |_| {
+			let mut exit_code = ExecutionResult::success();
 
-		if !self.job_specs.is_empty() {
-			for job_spec in &self.job_specs {
-				if let Some(job) = context.shell.jobs.resolve_job_spec(job_spec) {
+			if !self.job_specs.is_empty() {
+				for job_spec in &self.job_specs {
+					if let Some(job) = context.shell.jobs.resolve_job_spec(job_spec) {
+						job.move_to_background()?;
+					} else {
+						writeln!(
+							context.stderr(),
+							"{}: {}: no such job",
+							context.command_name,
+							job_spec
+						)?;
+						exit_code = ExecutionResult::general_error();
+					}
+				}
+			} else {
+				if let Some(job) = context.shell.jobs.current_job_mut() {
 					job.move_to_background()?;
 				} else {
-					writeln!(context.stderr(), "{}: {}: no such job", context.command_name, job_spec)?;
+					writeln!(context.stderr(), "{}: no current job", context.command_name)?;
 					exit_code = ExecutionResult::general_error();
 				}
 			}
-		} else {
-			if let Some(job) = context.shell.jobs.current_job_mut() {
-				job.move_to_background()?;
-			} else {
-				writeln!(context.stderr(), "{}: no current job", context.command_name)?;
-				exit_code = ExecutionResult::general_error();
-			}
-		}
 
-		Ok(exit_code)
+			Ok(exit_code)
+		})
 	}
 }
