@@ -57,7 +57,7 @@ async function harness(extraProviders: Record<string, unknown> = {}) {
 	const selector = new ModelSelectorComponent(
 		{ requestRender: vi.fn() } as unknown as TUI,
 		registry.find("google-vertex", "gemini-3.8-flash"),
-		Settings.isolated(),
+		Settings.isolated({ modelProviderOrder: ["test-cloud"] }),
 		registry,
 		[],
 		onSelect,
