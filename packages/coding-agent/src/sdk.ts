@@ -687,11 +687,14 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	registerSshCleanup();
 	registerPythonCleanup();
 
+	const settings = options.settings ?? (await logger.time("settings", Settings.init, { cwd, agentDir }));
+
 	// Use provided or create AuthStorage and ModelRegistry
 	const authStorage = options.authStorage ?? (await logger.time("discoverModels", discoverAuthStorage, agentDir));
-	const modelRegistry = options.modelRegistry ?? new ModelRegistry(authStorage);
+	const modelRegistry =
+		options.modelRegistry ??
+		new ModelRegistry(authStorage, undefined, { getProviderOrder: () => settings.get("modelProviderOrder") });
 
-	const settings = options.settings ?? (await logger.time("settings", Settings.init, { cwd, agentDir }));
 	const configuredContextLoadingMode = settings.get("context.loadingMode");
 	const resolveContextLoadingMode = (candidate: Model | undefined): "eager" | "progressive" =>
 		configuredContextLoadingMode === "progressive" ||

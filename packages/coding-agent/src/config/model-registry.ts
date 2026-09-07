@@ -770,14 +770,6 @@ function getDisabledProviderIdsFromSettings(): Set<string> {
 	}
 }
 
-function getConfiguredProviderOrderFromSettings(): string[] {
-	try {
-		return settings.get("modelProviderOrder");
-	} catch {
-		return [];
-	}
-}
-
 /**
  * Model registry - loads and manages models, resolves API keys via AuthStorage.
  */
@@ -822,6 +814,7 @@ export class ModelRegistry {
 	constructor(
 		readonly authStorage: AuthStorage,
 		modelsPath?: string,
+		private readonly options: { getProviderOrder?: () => readonly string[] } = {},
 	) {
 		this.#modelsConfigFile = ModelsConfigFile.relocate(modelsPath);
 		this.#cacheDbPath = modelsPath ? path.join(path.dirname(modelsPath), "models.db") : undefined;
@@ -1999,7 +1992,7 @@ export class ModelRegistry {
 	}
 
 	#providerRank(models: readonly Model<Api>[]): Map<string, number> {
-		const configuredProviders = getConfiguredProviderOrderFromSettings();
+		const configuredProviders = this.options.getProviderOrder?.() ?? [];
 		const result = new Map<string, number>();
 		let nextRank = 0;
 		for (const provider of configuredProviders) {

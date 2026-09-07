@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -9,6 +9,21 @@ function mockSession(bashEnv?: Record<string, string>): any {
 }
 
 describe("XcshApiTool", () => {
+	let cacheDir: string;
+	let originalEnv: Record<string, string | undefined>;
+	const envKeys = ["XCSH_API_URL", "XCSH_API_TOKEN", "XCSH_NAMESPACE", "XCSH_CONTEXT_NAME"];
+	beforeEach(async () => {
+		originalEnv = Object.fromEntries(envKeys.map(key => [key, process.env[key]]));
+		for (const key of envKeys) delete process.env[key];
+		cacheDir = await fs.mkdtemp(path.join(os.tmpdir(), "xcsh-api-fixture-"));
+	});
+	afterEach(async () => {
+		for (const key of envKeys) {
+			if (originalEnv[key] === undefined) delete process.env[key];
+			else process.env[key] = originalEnv[key];
+		}
+		await fs.rm(cacheDir, { recursive: true, force: true });
+	});
 	it("has correct name and label", () => {
 		const tool = new XcshApiTool(mockSession());
 		expect(tool.name).toBe("xcsh_api");
@@ -641,7 +656,7 @@ describe("XcshApiTool", () => {
 				XCSH_NAMESPACE: scopeName,
 				XCSH_CONTEXT_NAME: `context-${crypto.randomUUID()}`,
 			});
-			const concrete = await new XcshApiTool(session).execute("context-default", {
+			const concrete = await new XcshApiTool(session, cacheDir).execute("context-default", {
 				method: "GET",
 				paths: ["/api/config/namespaces/{namespace}/api_definitions"],
 			});
@@ -649,7 +664,7 @@ describe("XcshApiTool", () => {
 			expect(seenPaths).toContain(`/api/config/namespaces/${scopeName}/api_definitions`);
 
 			seenPaths.length = 0;
-			const tenantWide = await new XcshApiTool(session).execute("tenant-wide", {
+			const tenantWide = await new XcshApiTool(session, cacheDir).execute("tenant-wide", {
 				method: "GET",
 				paths: ["/api/config/namespaces/{namespace}/api_definitions"],
 				params: { namespace: "*" },
@@ -679,10 +694,13 @@ describe("XcshApiTool", () => {
 			return Response.json({ items: [{ name: "process-member", namespace: scopeName }] });
 		}) as typeof fetch;
 		try {
-			const result = await new XcshApiTool(mockSession()).execute("process-default", {
-				method: "GET",
-				paths: ["/api/config/namespaces/{namespace}/http_loadbalancers"],
-			});
+			const result = await new XcshApiTool(mockSession({ XCSH_NAMESPACE: "context-must-lose" }), cacheDir).execute(
+				"process-default",
+				{
+					method: "GET",
+					paths: ["/api/config/namespaces/{namespace}/http_loadbalancers"],
+				},
+			);
 			expect(result.details?.batchTotalItems).toBe(1);
 			expect(result.content.find(content => content.type === "text")?.text).toContain("process-member");
 		} finally {
@@ -715,7 +733,6 @@ describe("XcshApiTool", () => {
 			collectionFetches++;
 			return Response.json({ items: [{ name: `member-${collectionFetches}`, namespace: scopeName }] });
 		}) as typeof fetch;
-		const cacheDir = path.join(os.tmpdir(), "xcsh", "batch-cache-v2");
 		const before = new Set(await fs.readdir(cacheDir).catch(() => []));
 		let created: string[] = [];
 		const run = async (overrides: Record<string, string>, paths: string[] = [pathOne]) => {
@@ -726,7 +743,7 @@ describe("XcshApiTool", () => {
 				XCSH_CONTEXT_NAME: contextName,
 				...overrides,
 			};
-			return new XcshApiTool(mockSession(env)).execute("cache-isolation", { method: "GET", paths });
+			return new XcshApiTool(mockSession(env), cacheDir).execute("cache-isolation", { method: "GET", paths });
 		};
 		try {
 			await run({});
