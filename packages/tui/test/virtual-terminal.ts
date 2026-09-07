@@ -1,3 +1,4 @@
+import { afterEach, beforeEach } from "bun:test";
 import type { Terminal, TerminalAppearance } from "@f5-sales-demo/pi-tui/terminal";
 import type { Terminal as XtermTerminalType } from "@xterm/headless";
 import xterm from "@xterm/headless";
@@ -203,4 +204,21 @@ export class VirtualTerminal implements Terminal {
 	reset(): void {
 		this.xterm.reset();
 	}
+}
+
+/** These fixtures emulate a standalone terminal, independently of the test runner's host. */
+export function useStandaloneTerminalEnvironment(): void {
+	const keys = ["HERDR_ENV", "HERDR_PANE_ID", "HERDR_TAB_ID", "HERDR_WORKSPACE_ID", "TMUX", "STY", "ZELLIJ", "TERM"];
+	let saved: Record<string, string | undefined>;
+	beforeEach(() => {
+		saved = Object.fromEntries(keys.map(key => [key, process.env[key]]));
+		for (const key of keys) delete process.env[key];
+		process.env.TERM = "xterm-256color";
+	});
+	afterEach(() => {
+		for (const key of keys) {
+			if (saved[key] === undefined) delete process.env[key];
+			else process.env[key] = saved[key];
+		}
+	});
 }

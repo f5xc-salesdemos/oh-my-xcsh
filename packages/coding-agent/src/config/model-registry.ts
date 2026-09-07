@@ -802,6 +802,13 @@ export class ModelRegistry {
 	#backgroundRefresh?: Promise<void>;
 	#lastDiscoveryWarnings: Map<string, string> = new Map();
 	#hasProbed = false;
+	#refreshQueue: Promise<void> = Promise.resolve();
+
+	#enqueueRefresh(operation: () => Promise<void>): Promise<void> {
+		const pending = this.#refreshQueue.then(operation);
+		this.#refreshQueue = pending.catch(() => {});
+		return pending;
+	}
 	// Runtime extension model overlays — persist across refresh() cycles so that
 	// models registered by extensions survive the model selector's offline reload.
 	#runtimeModelOverlays: CustomModelOverlay[] = [];
@@ -833,7 +840,11 @@ export class ModelRegistry {
 	/**
 	 * Reload models from disk (built-in + custom from models.json).
 	 */
-	async refresh(strategy: ModelRefreshStrategy = "online-if-uncached"): Promise<void> {
+	refresh(strategy: ModelRefreshStrategy = "online-if-uncached"): Promise<void> {
+		return this.#enqueueRefresh(() => this.#refreshAll(strategy));
+	}
+
+	async #refreshAll(strategy: ModelRefreshStrategy): Promise<void> {
 		// On first refresh, probe LiteLLM proxy and upgrade config with discovery if available
 		if (!this.#hasProbed && hasLiteLLMEnv()) {
 			this.#hasProbed = true;
@@ -888,8 +899,12 @@ export class ModelRegistry {
 		return false;
 	}
 
-	async refreshProvider(providerId: string, strategy: ModelRefreshStrategy = "online"): Promise<void> {
-		this.#reloadStaticModels();
+	refreshProvider(providerId: string, strategy: ModelRefreshStrategy = "online"): Promise<void> {
+		return this.#enqueueRefresh(() => this.#refreshProvider(providerId, strategy));
+	}
+
+	async #refreshProvider(providerId: string, strategy: ModelRefreshStrategy): Promise<void> {
+		if (getDisabledProviderIdsFromSettings().has(providerId)) return;
 		for (const selector of this.#suppressedSelectors.keys()) {
 			if (selector.startsWith(`${providerId}/`)) {
 				this.#suppressedSelectors.delete(selector);
@@ -1215,9 +1230,11 @@ export class ModelRegistry {
 		strategy: ModelRefreshStrategy,
 		providerFilter?: ReadonlySet<string>,
 	): Promise<void> {
-		const selectedDiscoverableProviders = providerFilter
-			? this.#discoverableProviders.filter(provider => providerFilter.has(provider.provider))
-			: this.#discoverableProviders;
+		const selectedDiscoverableProviders = (
+			providerFilter
+				? this.#discoverableProviders.filter(provider => providerFilter.has(provider.provider))
+				: this.#discoverableProviders
+		).filter(provider => !getDisabledProviderIdsFromSettings().has(provider.provider));
 		const configuredDiscoveriesPromise =
 			selectedDiscoverableProviders.length === 0
 				? Promise.resolve<Model<Api>[]>([])
@@ -1229,9 +1246,11 @@ export class ModelRegistry {
 			this.#discoverBuiltInProviderModels(strategy, providerFilter),
 		]);
 		const discovered = [...configuredDiscovered, ...builtInDiscovered];
-		if (discovered.length === 0) {
-			return;
-		}
+		// Replace only catalogs which completed successfully, including an empty response.
+		const refreshed = new Set([
+			...selectedDiscoverableProviders.map(provider => provider.provider),
+			...discovered.map(model => model.provider),
+		]);
 		const discoveredModels = this.#applyHardcodedModelPolicies(
 			discovered.map(model => {
 				const existing = this.find(model.provider, model.id);
@@ -1254,6 +1273,9 @@ export class ModelRegistry {
 						}
 					: model;
 			}),
+		);
+		this.#models = this.#models.filter(
+			model => !refreshed.has(model.provider) || this.#providerDiscoveryStates.get(model.provider)?.status !== "ok",
 		);
 		const resolved = this.#mergeResolvedModels(this.#models, discoveredModels);
 		const withConfigModels = this.#mergeCustomModels(resolved, this.#customModelOverlays);
@@ -1310,7 +1332,7 @@ export class ModelRegistry {
 			? result.models.length > 0
 				? "cached"
 				: "unavailable"
-			: result.models.length > 0 && strategy !== "offline"
+			: !result.stale && strategy !== "offline"
 				? "ok"
 				: cached
 					? "cached"
@@ -1320,7 +1342,7 @@ export class ModelRegistry {
 			status,
 			optional: providerConfig.optional ?? false,
 			stale: result.stale || status === "cached",
-			fetchedAt: discoveryError ? cached?.updatedAt : Date.now(),
+			fetchedAt: discoveryError || strategy === "offline" ? cached?.updatedAt : Date.now(),
 			models: result.models.map(model => model.id),
 			error: discoveryError,
 		});
@@ -1385,7 +1407,8 @@ export class ModelRegistry {
 				)
 			: new Set<string>();
 
-		const managerOptions = (await this.#collectBuiltInModelManagerOptions()).filter(opts => {
+		const managerOptions = (await this.#collectBuiltInModelManagerOptions(providerFilter)).filter(opts => {
+			if (getDisabledProviderIdsFromSettings().has(opts.providerId)) return false;
 			if (configuredDiscoveryProviders.has(opts.providerId)) {
 				return false;
 			}
@@ -1403,7 +1426,7 @@ export class ModelRegistry {
 		return discoveries.flat();
 	}
 
-	async #collectBuiltInModelManagerOptions(): Promise<ModelManagerOptions<Api>[]> {
+	async #collectBuiltInModelManagerOptions(providerFilter?: ReadonlySet<string>): Promise<ModelManagerOptions<Api>[]> {
 		const specialProviderDescriptors: Array<{
 			providerId: string;
 			resolveKey: (value: string | undefined) => string | undefined;
@@ -1444,12 +1467,15 @@ export class ModelRegistry {
 				},
 			},
 		];
-		const peekKey = (descriptor: { providerId: string }) => this.#peekApiKeyForProvider(descriptor.providerId);
+		const selected = (provider: string) =>
+			(!providerFilter || providerFilter.has(provider)) && !getDisabledProviderIdsFromSettings().has(provider);
+		const peekKey = (descriptor: { providerId: string }) =>
+			selected(descriptor.providerId) ? this.#peekApiKeyForProvider(descriptor.providerId) : undefined;
 		// Special providers discover entitlement-scoped models through OAuth. Refresh their
 		// credentials before discovery: an expired access token otherwise removes newly
 		// entitled models from explicit CLI resolution before a request can refresh it.
 		const resolveSpecialKey = (descriptor: { providerId: string }) =>
-			this.getApiKeyForProvider(descriptor.providerId);
+			selected(descriptor.providerId) ? this.getApiKeyForProvider(descriptor.providerId) : undefined;
 		const [standardProviderKeys, specialKeys] = await Promise.all([
 			Promise.all(PROVIDER_DESCRIPTORS.map(peekKey)),
 			Promise.all(specialProviderDescriptors.map(resolveSpecialKey)),
@@ -1458,7 +1484,7 @@ export class ModelRegistry {
 		for (let i = 0; i < PROVIDER_DESCRIPTORS.length; i++) {
 			const descriptor = PROVIDER_DESCRIPTORS[i];
 			const apiKey = standardProviderKeys[i];
-			if (isAuthenticated(apiKey) || descriptor.allowUnauthenticated) {
+			if (selected(descriptor.providerId) && (isAuthenticated(apiKey) || descriptor.allowUnauthenticated)) {
 				options.push(
 					descriptor.createModelManagerOptions({
 						apiKey: isAuthenticated(apiKey) ? apiKey : undefined,
@@ -1485,7 +1511,26 @@ export class ModelRegistry {
 	): Promise<Model<Api>[]> {
 		const previous = this.#providerDiscoveryStates.get(options.providerId);
 		try {
-			const manager = createModelManager({ ...options, cacheDbPath: this.#cacheDbPath });
+			let discoveryError: string | undefined;
+			const fetchDynamicModels = options.fetchDynamicModels;
+			const manager = createModelManager({
+				...options,
+				cacheDbPath: this.#cacheDbPath,
+				...(fetchDynamicModels
+					? {
+							fetchDynamicModels: async () => {
+								try {
+									const models = await fetchDynamicModels();
+									if (models === null) discoveryError = "Live model discovery unavailable";
+									return models;
+								} catch (error) {
+									discoveryError = error instanceof Error ? error.message : String(error);
+									return null;
+								}
+							},
+						}
+					: {}),
+			});
 			const result = await manager.refresh(strategy);
 			const models = result.models.map(model =>
 				model.provider === options.providerId ? model : { ...model, provider: options.providerId },
@@ -1495,7 +1540,8 @@ export class ModelRegistry {
 				status: result.stale ? "cached" : "ok",
 				optional: false,
 				stale: result.stale,
-				fetchedAt: Date.now(),
+				fetchedAt: result.stale ? previous?.fetchedAt : Date.now(),
+				error: discoveryError,
 				models: models.map(model => model.id),
 			});
 			return models;
@@ -2070,6 +2116,18 @@ export class ModelRegistry {
 		return this.#discoverableProviders
 			.filter(provider => !disabledProviders.has(provider.provider))
 			.map(provider => provider.provider);
+	}
+
+	/** Configured and authenticated providers remain browsable even with an empty catalog. */
+	getProviderInventory(): string[] {
+		const disabled = getDisabledProviderIdsFromSettings();
+		return [
+			...new Set([
+				...this.#configuredProviderIds,
+				...this.getDiscoverableProviders(),
+				...this.#models.filter(model => this.authStorage.hasAuth(model.provider)).map(model => model.provider),
+			]),
+		].filter(provider => !disabled.has(provider));
 	}
 
 	getProviderDiscoveryState(provider: string): ProviderDiscoveryState | undefined {

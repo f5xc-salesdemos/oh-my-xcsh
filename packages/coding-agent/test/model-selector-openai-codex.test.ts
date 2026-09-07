@@ -126,10 +126,16 @@ describe("default GPT-5.6 model picker presentation", () => {
 		);
 		await Bun.sleep(0);
 		selector.handleInput("\r");
+		selector.handleInput("\r");
 		selector.handleInput("\x1b[B");
 		selector.handleInput("\x1b[B");
 		selector.handleInput("\r");
-		expect(onSelect).toHaveBeenCalledWith(tier, null, Effort.Low, "openai-codex/gpt-5.6-sol");
+		expect(onSelect).toHaveBeenCalledWith({
+			model: tier,
+			scope: "conversation",
+			thinkingLevel: Effort.Low,
+			selector: "openai-codex/gpt-5.6-sol",
+		});
 	});
 
 	it("searches presentation metadata as well as the selector", () => {

@@ -1,6 +1,8 @@
 import { describe, expect, it } from "bun:test";
 import { type Component, TUI } from "@f5-sales-demo/pi-tui";
-import { VirtualTerminal } from "./virtual-terminal";
+import { useStandaloneTerminalEnvironment, VirtualTerminal } from "./virtual-terminal";
+
+useStandaloneTerminalEnvironment();
 
 class MutableLinesComponent implements Component {
 	#lines: string[];

@@ -1434,7 +1434,9 @@
       "purpose": "Answer the distinct task or decision described by Configure providers and model routing.",
       "sourceAuthority": [
         "packages/coding-agent/src/config/settings-schema.ts",
-        "packages/coding-agent/src/services/xcsh-context.ts"
+        "packages/coding-agent/src/services/xcsh-context.ts",
+        "packages/coding-agent/src/modes/components/model-selector.ts",
+        "packages/coding-agent/src/modes/controllers/model-selection.ts"
       ],
       "evidence": [
         "source-authority",
@@ -1468,6 +1470,17 @@
             "lc-4ebb7fe5353fb256",
             "lc-5c0c278a723062ee"
           ]
+        },
+        {
+          "text": "How do I select a model in a conversation?",
+          "readerQuestion": "How do I change this conversation without changing saved defaults?",
+          "purpose": "Explain provider navigation, explicit selection scope, reasoning, persistence and resume.",
+          "evidence": [
+            "source-authority",
+            "candidate-cli",
+            "offline-configuration"
+          ],
+          "legacyConceptIds": []
         },
         {
           "text": "Where does LiteLLM fit?",

@@ -607,6 +607,9 @@ export function buildSessionContext(
 			if (entry.model) {
 				const role = entry.role ?? "default";
 				models[role] = entry.model;
+				// Temporary choices are the active conversation model even before a response
+				// can infer it. This session-local slot does not change saved role settings.
+				if (role === "temporary" || role === "routing_switch") models.default = entry.model;
 			}
 		} else if (entry.type === "context_change") {
 			activeContextName = entry.contextName;

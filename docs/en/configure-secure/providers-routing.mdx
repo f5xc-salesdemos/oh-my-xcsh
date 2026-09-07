@@ -12,6 +12,20 @@ xcsh resolves a requested model against available providers and credentials. A p
 
 Run `xcsh --list-models <PROVIDER>`, then pass one returned name to `--model`. Environment keys and supported subscription sessions authenticate providers; never store tokens in committed settings.
 
+## How do I select a model in a conversation?
+
+Open `/model`. Tab and Shift+Tab browse providers; typing searches across them. The active conversation model and saved role badges are shown separately. Configured providers remain visible when discovery is empty, unavailable, or requires authentication. Use Ctrl+R to refresh the current provider or Ctrl+L to open login.
+
+Choose a model with Enter, then choose its scope:
+
+- **Use in this conversation** is preselected. It changes this session, including resume, without changing saved role assignments.
+- **Save as default** changes the current conversation and the default for future sessions.
+- **Assign to role** saves Default, Fast/SMOL, Thorough/SLOW, Plan, or another existing role. Roles other than Default leave the current conversation unchanged.
+
+Choose a reasoning level supported by that exact model and press Enter to confirm. Inherit displays the provider default; an existing supported reasoning selection is preselected. Escape backs out without applying an unfinished choice. Failed writes are reported before badges show success.
+
+A manual conversation choice remains in effect under automatic routing. Entering planning mode uses the Plan assignment; exiting restores the prior conversation model and reasoning. Explicit `--models` scopes still limit the picker.
+
 ## Where does LiteLLM fit?
 
 LiteLLM is an optional provider proxy installed or checked with `xcsh setup litellm`. Its base uniform resource locator (URL) and credential belong in the runtime environment. Successful text Responses support does not imply Realtime or audio support; test the exact endpoint your workflow uses.
