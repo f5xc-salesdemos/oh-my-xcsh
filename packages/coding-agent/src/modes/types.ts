@@ -15,6 +15,7 @@ import type { AgentSession, AgentSessionEvent } from "../session/agent-session";
 import type { HistoryStorage } from "../session/history-storage";
 import type { SessionContext, SessionManager } from "../session/session-manager";
 import type { ExitPlanModeDetails, LspStartupServerInfo } from "../tools";
+import type { OpenHttpUrlResult } from "../utils/open";
 import type { AssistantMessageComponent } from "./components/assistant-message";
 import type { BashExecutionComponent } from "./components/bash-execution";
 import type { CustomEditor } from "./components/custom-editor";
@@ -173,6 +174,7 @@ export interface InteractiveModeContext {
 	handleExportCommand(text: string): Promise<void>;
 	handleShareCommand(): Promise<void>;
 	handleCopyCommand(sub?: string): void;
+	handleOpenCommand(args?: string): Promise<void>;
 	handleMediaCommand(text: string): void;
 	handleSessionCommand(): Promise<void>;
 	handleJobsCommand(): Promise<void>;
@@ -196,10 +198,12 @@ export interface InteractiveModeContext {
 	handleSTTToggle(): Promise<void>;
 	executeCompaction(customInstructionsOrOptions?: string | CompactOptions, isAuto?: boolean): Promise<void>;
 	openInBrowser(urlOrPath: string): void;
+	openHttpUrl(url: string): Promise<OpenHttpUrlResult>;
 	refreshSlashCommandState(cwd?: string): Promise<void>;
 
 	// Selector handling
 	showSettingsSelector(): void;
+	showCopySelector(): void;
 	showHistorySearch(): void;
 	showExtensionsDashboard(): void;
 	showAgentsDashboard(): void;

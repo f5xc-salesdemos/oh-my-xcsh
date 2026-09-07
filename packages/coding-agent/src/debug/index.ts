@@ -4,7 +4,6 @@
  * Provides tools for debugging, bug report generation, and system diagnostics.
  */
 import * as fs from "node:fs/promises";
-import * as url from "node:url";
 import { getWorkProfile } from "@f5-sales-demo/pi-natives";
 import {
 	Container,
@@ -21,6 +20,7 @@ import { DynamicBorder } from "../modes/components/dynamic-border";
 import { getSelectListTheme, getSymbolTheme, theme } from "../modes/theme/theme";
 import type { InteractiveModeContext } from "../modes/types";
 import { formatBytes } from "../tools/render-utils";
+import { fileHyperlink } from "../tui/hyperlink";
 import { openPath } from "../utils/open";
 import { DebugLogViewerComponent } from "./log-viewer";
 import { generateHeapSnapshotData, type ProfilerSession, startCpuProfile } from "./profiler";
@@ -46,8 +46,7 @@ const DEBUG_MENU_ITEMS: SelectItem[] = [
 ];
 
 const formatFileHyperlink = (path: string): string => {
-	const fileUrl = url.pathToFileURL(path).href;
-	return `\x1b]8;;${fileUrl}\x07${path}\x1b]8;;\x07`;
+	return fileHyperlink(path, path);
 };
 
 /**

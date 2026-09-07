@@ -14,6 +14,14 @@ const hasDisplay = process.platform !== "linux" || Boolean(process.env.DISPLAY |
  * @param text - UTF-8 text to place on the clipboard.
  */
 export async function copyToClipboard(text: string): Promise<void> {
+	await copyToClipboardWithResult(text);
+}
+
+export type CopyToClipboardResult = { ok: true } | { ok: false; error: string };
+
+/** Copy text while preserving an actionable failure result for interactive workflows. */
+export async function copyToClipboardWithResult(text: string): Promise<CopyToClipboardResult> {
+	let osc52Accepted = false;
 	if (process.stdout.isTTY) {
 		const onError = (err: unknown) => {
 			process.stdout.off("error", onError);
@@ -34,6 +42,7 @@ export async function copyToClipboard(text: string): Promise<void> {
 					return;
 				}
 			});
+			osc52Accepted = true;
 		} catch (err) {
 			process.stdout.off("error", onError);
 			if ((err as NodeJS.ErrnoException | null | undefined)?.code !== "EPIPE") {
@@ -47,15 +56,17 @@ export async function copyToClipboard(text: string): Promise<void> {
 		if (process.env.TERMUX_VERSION) {
 			try {
 				execSync("termux-clipboard-set", { input: text, timeout: 5000 });
-				return;
+				return { ok: true };
 			} catch {
 				// Fall through to native
 			}
 		}
 
 		await native.copyToClipboard(text);
-	} catch {
-		// Ignore — clipboard copy is best-effort
+		return { ok: true };
+	} catch (error) {
+		if (osc52Accepted) return { ok: true };
+		return { ok: false, error: error instanceof Error ? error.message : String(error) };
 	}
 }
 

@@ -230,13 +230,14 @@ export function resolveTerminalId(env: NodeJS.ProcessEnv): TerminalId {
 /** Resolve terminal capabilities from an explicit environment and stdout TTY state. */
 export function resolveTerminalInfo(env: NodeJS.ProcessEnv, stdoutIsTTY: boolean): TerminalInfo {
 	const terminal = getTerminalInfo(resolveTerminalId(env));
+	const hyperlinks = shouldEnableTerminalHyperlinks(env, stdoutIsTTY, terminal.id);
 	const forcedImageProtocol = getForcedImageProtocol(env);
 	if (forcedImageProtocol !== undefined) {
 		return new TerminalInfo(
 			terminal.id,
 			forcedImageProtocol,
 			terminal.trueColor,
-			terminal.hyperlinks,
+			hyperlinks,
 			terminal.notifyProtocol,
 		);
 	}
@@ -247,12 +248,72 @@ export function resolveTerminalInfo(env: NodeJS.ProcessEnv, stdoutIsTTY: boolean
 				terminal.id,
 				fallbackImageProtocol,
 				terminal.trueColor,
-				terminal.hyperlinks,
+				hyperlinks,
 				terminal.notifyProtocol,
 			);
 		}
 	}
-	return terminal;
+	return new TerminalInfo(
+		terminal.id,
+		terminal.imageProtocol,
+		terminal.trueColor,
+		hyperlinks,
+		terminal.notifyProtocol,
+	);
+}
+
+function versionAtLeast(raw: string | undefined, major: number, minor: number, patch = 0): boolean {
+	if (!raw) return false;
+	const match = /^(\d+)\.(\d+)(?:\.(\d+))?/u.exec(raw.trim());
+	if (!match) return false;
+	const actual = [Number(match[1]), Number(match[2]), Number(match[3] ?? 0)];
+	const wanted = [major, minor, patch];
+	for (let index = 0; index < wanted.length; index++) {
+		if (actual[index] !== wanted[index]) return actual[index]! > wanted[index]!;
+	}
+	return true;
+}
+
+function localCommandVersion(env: NodeJS.ProcessEnv, command: "herdr" | "tmux"): string | undefined {
+	if (env !== Bun.env) return undefined;
+	try {
+		const result = Bun.spawnSync([command, command === "tmux" ? "-V" : "--version"], {
+			stdin: "ignore",
+			stdout: "pipe",
+			stderr: "ignore",
+		});
+		if (result.exitCode !== 0) return undefined;
+		return /(\d+\.\d+(?:\.\d+)?(?:[-+._A-Za-z0-9]*)?)/u.exec(result.stdout.toString())?.[1];
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * Resolve the immutable startup OSC 8 capability snapshot.
+ *
+ * Unknown terminals and lossy multiplexers are deliberately conservative.
+ * Herdr and tmux are enabled only at versions that preserve OSC 8 spans.
+ */
+function shouldEnableTerminalHyperlinks(
+	env: NodeJS.ProcessEnv,
+	stdoutIsTTY: boolean,
+	terminalId: TerminalId = resolveTerminalId(env),
+): boolean {
+	if (!stdoutIsTTY || env.NO_COLOR) return false;
+	if (env.STY || env.ZELLIJ) return false;
+	if (isInsideHerdr(env)) return versionAtLeast(env.HERDR_VERSION ?? localCommandVersion(env, "herdr"), 0, 7, 5);
+	if (env.TMUX) {
+		const declaredVersion =
+			env.TMUX_VERSION ?? (env.TERM_PROGRAM?.toLowerCase() === "tmux" ? env.TERM_PROGRAM_VERSION : undefined);
+		return versionAtLeast(declaredVersion ?? localCommandVersion(env, "tmux"), 3, 4);
+	}
+	const term = env.TERM?.toLowerCase() ?? "";
+	if (term.startsWith("screen") || term.startsWith("tmux") || term.startsWith("zellij")) return false;
+	if (env.SSH_CONNECTION || env.SSH_CLIENT || env.SSH_TTY) {
+		return terminalId !== "base" && terminalId !== "trueColor";
+	}
+	return terminalId !== "base" && terminalId !== "trueColor";
 }
 
 export const TERMINAL_ID: TerminalId = resolveTerminalId(Bun.env);
@@ -261,6 +322,7 @@ export const TERMINAL = resolveTerminalInfo(Bun.env, process.stdout.isTTY ?? fal
 
 type MutableTerminalInfo = {
 	imageProtocol: ImageProtocol | null;
+	hyperlinks: boolean;
 };
 
 /**
@@ -268,6 +330,11 @@ type MutableTerminalInfo = {
  */
 export function setTerminalImageProtocol(imageProtocol: ImageProtocol | null): void {
 	(TERMINAL as unknown as MutableTerminalInfo).imageProtocol = imageProtocol;
+}
+
+/** Override OSC 8 hyperlink emission after applying the user's policy. */
+export function setTerminalHyperlinks(enabled: boolean): void {
+	(TERMINAL as unknown as MutableTerminalInfo).hyperlinks = enabled;
 }
 
 export function getTerminalInfo(terminalId: TerminalId): TerminalInfo {

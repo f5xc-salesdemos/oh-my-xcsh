@@ -37,10 +37,14 @@ export async function detectVertexProject(runtime: VertexLoginRuntime): Promise<
 	return gcloudProject ? { id: gcloudProject, source: "gcloud" } : undefined;
 }
 
-export function isHeadlessTerminal(environment: Record<string, string | undefined>): boolean {
-	return Boolean(
-		environment.HERDR_ENV === "1" || environment.CLOUD_SHELL || environment.SSH_CONNECTION || !environment.DISPLAY,
-	);
+export function isHeadlessTerminal(
+	environment: Record<string, string | undefined>,
+	platform: NodeJS.Platform = process.platform,
+): boolean {
+	if (environment.CLOUD_SHELL || environment.SSH_CONNECTION || environment.SSH_CLIENT || environment.SSH_TTY)
+		return true;
+	if (platform === "darwin" || platform === "win32") return false;
+	return !environment.DISPLAY && !environment.WAYLAND_DISPLAY;
 }
 
 export function vertexFailureGuidance(error: unknown, project?: string): string {

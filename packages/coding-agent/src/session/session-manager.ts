@@ -2583,6 +2583,20 @@ export class SessionManager {
 		return path;
 	}
 
+	/** Inspect at most the newest branch entries and return the messages among them. */
+	getMessageBranchTail(limit: number): { entries: SessionMessageEntry[]; truncated: boolean } {
+		const entries: SessionMessageEntry[] = [];
+		let current = this.#leafId ? this.#byId.get(this.#leafId) : undefined;
+		let inspected = 0;
+		while (current && inspected < limit) {
+			if (current.type === "message") entries.push(current);
+			inspected++;
+			current = current.parentId ? this.#byId.get(current.parentId) : undefined;
+		}
+		entries.reverse();
+		return { entries, truncated: current !== undefined };
+	}
+
 	/**
 	 * Build the session context (what gets sent to the LLM).
 	 * Uses tree traversal from current leaf.

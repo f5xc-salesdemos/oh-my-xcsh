@@ -148,7 +148,7 @@ mod platform {
 					assertion_type.as_ptr(),
 					ASSERTION_LEVEL_ON,
 					assertion_reason.as_ptr(),
-					&mut assertion_id,
+					&raw mut assertion_id,
 				)
 			};
 			if status != 0 {

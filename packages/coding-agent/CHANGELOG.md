@@ -6,6 +6,14 @@
 
 ### Added
 
+- Added capability-aware terminal hyperlinks, automatic local Vertex sign-in launch with durable
+  manual recovery, HTTP(S)-only `/open`, `/copy link`, and a bounded fullscreen transcript copy
+  picker. Semantically ported from [can1357/oh-my-pi#10196](https://github.com/can1357/oh-my-pi/pull/10196),
+  [#10606](https://github.com/can1357/oh-my-pi/pull/10606),
+  [#11002](https://github.com/can1357/oh-my-pi/pull/11002),
+  [#10922](https://github.com/can1357/oh-my-pi/pull/10922), and
+  [#11086](https://github.com/can1357/oh-my-pi/pull/11086)
+  ([#3758](https://github.com/f5-sales-demo/xcsh/issues/3758)).
 - Added strict `xcsh://registry/provider/<namespace>/<type>` and
   `xcsh://registry/module/<namespace>/<name>/<provider>` Terraform Registry lookups with bounded,
   protocol-native discovery and actionable failures
