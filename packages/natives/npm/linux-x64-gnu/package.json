@@ -1,6 +1,6 @@
 {
 	"name": "@f5-sales-demo/pi-natives-linux-x64-gnu",
-	"version": "21.17.0",
+	"version": "21.18.0",
 	"description": "Native addon for @f5-sales-demo/pi-natives (Linux x64)",
 	"homepage": "https://github.com/f5-sales-demo/xcsh",
 	"author": "Can Boluk",
