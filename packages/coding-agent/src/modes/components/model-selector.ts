@@ -720,6 +720,12 @@ export class ModelSelectorComponent extends Container {
 		this.#updateList();
 		this.#tui.requestRender();
 		const providers = new Set(activeGroup.providers);
+		// Keep probing optional local runtimes without advertising absent installations.
+		if (activeGroup.classification === "local") {
+			for (const provider of this.#modelRegistry.getDiscoverableProviders?.() ?? []) {
+				if (LOCAL_PROVIDER_IDS.has(provider)) providers.add(provider);
+			}
+		}
 		try {
 			await Promise.all([...providers].map(provider => this.#modelRegistry.refreshProvider(provider, "online")));
 			const models = this.#availableItems();
@@ -917,7 +923,13 @@ export class ModelSelectorComponent extends Container {
 				new Text(theme.fg("muted", `  Refreshing ${activeGroup.label} model list…`), 0, 0),
 			);
 			this.#listContainer.addChild(new Spacer(1));
-		} else if (!searching && activeGroup?.stale) {
+		} else if (
+			!searching &&
+			activeGroup?.stale &&
+			activeGroup.providers.some(
+				provider => this.#modelRegistry.getProviderDiscoveryState?.(provider)?.status === "cached",
+			)
+		) {
 			const providerState =
 				activeGroup.classification === "authenticated"
 					? this.#modelRegistry.getProviderDiscoveryState(activeGroup.id)

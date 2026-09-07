@@ -174,16 +174,27 @@ try {
 	await wait("ready", text => text.includes("xcsh v") && text.includes("idle"), 45000);
 	await Bun.sleep(2500);
 	await openPicker();
+	const providerTabs = (await rendered()).split("\n").find(line => line.startsWith("Models:"));
+	if (!providerTabs) throw new Error("Provider navigation missing");
+	async function assertHealthyPicker(step: string) {
+		const text = await wait(step, text => text.includes(providerTabs!) && !text.includes("Refreshing "));
+		if (
+			/Unable to connect|Provider unavailable|authentication required|availability unverified|Ctrl\+R: retry/i.test(
+				text,
+			)
+		) {
+			throw new Error(`Unresolved provider state at ${step}; inspect the captured screen`);
+		}
+		if (!values.live && /llama\.cpp:|LM Studio:/.test(text)) {
+			throw new Error(`Unconfigured local runtime advertised at ${step}`);
+		}
+	}
+	await assertHealthyPicker("initial provider health");
 	for (let i = 0; i < 9; i++) {
 		await keys("Tab");
 		await Bun.sleep(200);
-		await wait(
-			`cycle ${i}`,
-			text =>
-				text.includes("Models:") &&
-				(values.live ||
-					(text.includes("Uat Cloud A") && text.includes("Uat Cloud B") && text.includes("Local Providers"))),
-		);
+		await wait(`cycle ${i}`, text => text.includes("Models:") && text.includes(providerTabs!));
+		await assertHealthyPicker(`provider health ${i}`);
 	}
 	await keys("Shift+Tab");
 	if (!values.live) {

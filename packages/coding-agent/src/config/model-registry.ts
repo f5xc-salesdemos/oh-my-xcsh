@@ -1094,7 +1094,7 @@ export class ModelRegistry {
 				api: "openai-responses",
 				baseUrl: Bun.env.OLLAMA_BASE_URL || "http://127.0.0.1:11434",
 				discovery: { type: "ollama" },
-				optional: true,
+				optional: !Bun.env.OLLAMA_BASE_URL,
 			});
 			this.#keylessProviders.add("ollama");
 		}
@@ -1104,7 +1104,7 @@ export class ModelRegistry {
 				api: "openai-responses",
 				baseUrl: Bun.env.LLAMA_CPP_BASE_URL || "http://127.0.0.1:8080",
 				discovery: { type: "llama.cpp" },
-				optional: true,
+				optional: !Bun.env.LLAMA_CPP_BASE_URL,
 			});
 			// Only mark as keyless if no API key is configured
 			if (!this.authStorage.hasAuth("llama.cpp")) {
@@ -1117,7 +1117,7 @@ export class ModelRegistry {
 				api: "openai-completions",
 				baseUrl: Bun.env.LM_STUDIO_BASE_URL || "http://127.0.0.1:1234/v1",
 				discovery: { type: "lm-studio" },
-				optional: true,
+				optional: !Bun.env.LM_STUDIO_BASE_URL,
 			});
 			this.#keylessProviders.add("lm-studio");
 		}
@@ -1498,6 +1498,17 @@ export class ModelRegistry {
 			const descriptor = specialProviderDescriptors[i];
 			const key = descriptor.resolveKey(specialKeys[i]);
 			if (!isAuthenticated(key)) {
+				if (selected(descriptor.providerId)) {
+					const previous = this.#providerDiscoveryStates.get(descriptor.providerId);
+					this.#providerDiscoveryStates.set(descriptor.providerId, {
+						provider: descriptor.providerId,
+						status: "unauthenticated",
+						optional: false,
+						stale: true,
+						fetchedAt: previous?.fetchedAt,
+						models: previous?.models ?? [],
+					});
+				}
 				continue;
 			}
 			options.push(descriptor.createOptions(key));
@@ -2124,7 +2135,11 @@ export class ModelRegistry {
 		return [
 			...new Set([
 				...this.#configuredProviderIds,
-				...this.getDiscoverableProviders(),
+				...this.#discoverableProviders
+					.filter(
+						provider => !provider.optional || this.#models.some(model => model.provider === provider.provider),
+					)
+					.map(provider => provider.provider),
 				...this.#models.filter(model => this.authStorage.hasAuth(model.provider)).map(model => model.provider),
 			]),
 		].filter(provider => !disabled.has(provider));

@@ -16,7 +16,7 @@ afterEach(() => {
 	for (const close of cleanup.splice(0).reverse()) close();
 });
 
-async function harness() {
+async function harness(extraProviders: Record<string, unknown> = {}) {
 	const dir = mkdtempSync(join(tmpdir(), "selector-registry-"));
 	cleanup.push(() => rmSync(dir, { recursive: true, force: true }));
 	const auth = await AuthStorage.create(join(dir, "auth.db"));
@@ -32,6 +32,7 @@ async function harness() {
 					api: "openai-completions",
 					discovery: { type: "openai-compat" },
 				},
+				...extraProviders,
 				ollama: {
 					baseUrl: "http://local.invalid/v1",
 					api: "openai-completions",
@@ -161,4 +162,88 @@ test("disabled providers are excluded from inventory and cannot be refreshed", a
 	await registry.refreshProvider("google-vertex");
 	expect(registry.getProviderDiscoveryState("google-vertex")).toEqual(state);
 	await settings.flush();
+});
+
+test("absent optional local probes do not become configured inventory or picker errors", async () => {
+	const { registry, response } = await harness();
+	response.fail = true;
+	await registry.refreshProvider("llama.cpp");
+	await registry.refreshProvider("lm-studio");
+	expect(registry.getProviderDiscoveryState("llama.cpp")?.error).toBe("controlled outage");
+	expect(registry.getProviderInventory()).not.toContain("llama.cpp");
+	expect(registry.getProviderInventory()).not.toContain("lm-studio");
+	response.fail = false;
+	await registry.refreshProvider("ollama");
+	const selector = new ModelSelectorComponent(
+		{ requestRender: vi.fn() } as unknown as TUI,
+		registry.find("ollama", "test-model"),
+		Settings.isolated(),
+		registry,
+		[],
+		() => {},
+		() => {},
+	);
+	await Bun.sleep(30);
+	const text = Bun.stripANSI(selector.render(160).join("\n"));
+	expect(text).toContain("Local Providers");
+	expect(text).not.toContain("llama.cpp:");
+	expect(text).not.toContain("LM Studio:");
+	expect(text).not.toContain("Cached model list");
+});
+
+test("an auto-discovered local provider remains visible with a real cached outage", async () => {
+	const { registry, response } = await harness();
+	await registry.refreshProvider("lm-studio");
+	expect(registry.getProviderInventory()).toContain("lm-studio");
+	response.fail = true;
+	await registry.refreshProvider("lm-studio");
+	expect(registry.getProviderInventory()).toContain("lm-studio");
+	expect(registry.getProviderDiscoveryState("lm-studio")).toMatchObject({
+		status: "cached",
+		error: "controlled outage",
+	});
+});
+
+test("explicitly configured unavailable local runtimes remain actionable", async () => {
+	const { registry, response } = await harness({
+		"lm-studio": {
+			baseUrl: "http://configured.invalid/v1",
+			api: "openai-completions",
+			auth: "none",
+			discovery: { type: "openai-compat" },
+		},
+	});
+	response.fail = true;
+	await registry.refreshProvider("lm-studio");
+	expect(registry.getProviderInventory()).toContain("lm-studio");
+	const selector = new ModelSelectorComponent(
+		{ requestRender: vi.fn() } as unknown as TUI,
+		undefined,
+		Settings.isolated(),
+		registry,
+		[],
+		() => {},
+		() => {},
+	);
+	await Bun.sleep(30);
+	selector.handleInput("\x1b[Z");
+	await Bun.sleep(1200);
+	const text = Bun.stripANSI(selector.render(160).join("\n"));
+	expect(text).toContain("LM Studio: controlled outage");
+	expect(text).toContain("Ctrl+R: retry");
+	expect(text).not.toContain("Cached model list");
+});
+
+test("stored but unusable cloud credentials report authentication required after refresh", async () => {
+	const { registry, auth } = await harness();
+	const key = vi.spyOn(auth, "getApiKey").mockResolvedValue(undefined);
+	try {
+		await registry.refreshProvider("google-vertex");
+		expect(registry.getProviderInventory()).toContain("google-vertex");
+		expect(registry.getProviderDiscoveryState("google-vertex")?.status).toBe("unauthenticated");
+	} finally {
+		key.mockRestore();
+	}
+	await registry.refreshProvider("google-vertex");
+	expect(registry.getProviderDiscoveryState("google-vertex")?.status).toBe("ok");
 });
