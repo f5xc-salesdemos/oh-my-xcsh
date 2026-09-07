@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import {
 	buildLogCopyPayload,
+	DebugLogViewerComponent,
 	DebugLogViewerModel,
 	LOAD_OLDER_LABEL,
 	SESSION_BOUNDARY_WARNING,
@@ -195,6 +196,69 @@ describe("DebugLogViewerModel", () => {
 		model.collapseSelected();
 		expect(model.isExpanded(0)).toBe(false);
 		expect(model.isExpanded(1)).toBe(false);
+	});
+});
+
+describe("DebugLogViewerComponent mouse", () => {
+	it("clicks a visible row to select and expand it without changing keyboard navigation", () => {
+		let updates = 0;
+		const viewer = new DebugLogViewerComponent({
+			logs: ["alpha", "beta", "gamma"].join("\n"),
+			terminalRows: 12,
+			onExit: () => {},
+			onUpdate: () => updates++,
+		});
+		viewer.render(80);
+		viewer.routeMouse(
+			{ button: 0, col: 1, row: 5, release: false, wheel: null, motion: false, leftClick: true },
+			5,
+			1,
+		);
+		const clicked = viewer
+			.render(80)
+			.map(line => Bun.stripANSI(line))
+			.join("\n");
+		expect(clicked).toContain("▾ alpha");
+		expect(updates).toBe(1);
+
+		viewer.handleInput("\x1b[B");
+		viewer.handleInput("\x1b[C");
+		const keyboard = viewer
+			.render(80)
+			.map(line => Bun.stripANSI(line))
+			.join("\n");
+		expect(keyboard).toContain("▾ beta");
+	});
+
+	it("wheel-scrolls only inside the log body", () => {
+		let updates = 0;
+		const viewer = new DebugLogViewerComponent({
+			logs: Array.from({ length: 20 }, (_, index) => `log-${index}`).join("\n"),
+			terminalRows: 11,
+			onExit: () => {},
+			onUpdate: () => updates++,
+		});
+		const before = viewer
+			.render(60)
+			.map(line => Bun.stripANSI(line))
+			.join("\n");
+		viewer.routeMouse(
+			{ button: 64, col: 1, row: 1, release: false, wheel: -1, motion: false, leftClick: false },
+			1,
+			1,
+		);
+		expect(updates).toBe(0);
+		viewer.routeMouse(
+			{ button: 64, col: 1, row: 5, release: false, wheel: -1, motion: false, leftClick: false },
+			5,
+			1,
+		);
+		const after = viewer
+			.render(60)
+			.map(line => Bun.stripANSI(line))
+			.join("\n");
+		expect(updates).toBe(1);
+		expect(after).not.toBe(before);
 	});
 });
 

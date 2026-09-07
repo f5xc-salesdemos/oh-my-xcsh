@@ -32,11 +32,15 @@ function makeSessionInfo(path: string): SessionInfo {
 function createContext(currentSessionFile: string): {
 	ctx: TestContext;
 	calls: string[];
+	shownOverlays: unknown[];
+	overlayOptions: unknown[];
 	setCurrentSessionFile: (path: string) => void;
 	showHookConfirm: (title: string, message: string) => Promise<boolean>;
 	newSession: () => Promise<boolean>;
 } {
 	const calls: string[] = [];
+	const shownOverlays: unknown[] = [];
+	const overlayOptions: unknown[] = [];
 	let sessionFile = currentSessionFile;
 	const editorContainer = {
 		children: [] as unknown[],
@@ -60,10 +64,16 @@ function createContext(currentSessionFile: string): {
 		editor: {},
 		ui: {
 			setFocus: vi.fn(),
+			showOverlay: vi.fn((component: unknown, options: unknown) => {
+				shownOverlays.push(component);
+				overlayOptions.push(options);
+				calls.push("ui.showOverlay");
+				return { hide: vi.fn(() => calls.push("overlay.hide")) };
+			}),
 			requestRender: vi.fn(() => {
 				calls.push("ui.requestRender");
 			}),
-			terminal: { columns: 120 },
+			terminal: { columns: 120, rows: 24 },
 		},
 		session: {
 			newSession,
@@ -128,6 +138,8 @@ function createContext(currentSessionFile: string): {
 	return {
 		ctx,
 		calls,
+		shownOverlays,
+		overlayOptions,
 		setCurrentSessionFile(path: string) {
 			sessionFile = path;
 		},
@@ -155,7 +167,7 @@ describe("SelectorController session deletion", () => {
 
 	it("detaches the active session before selector deletion removes it", async () => {
 		const activeSession = makeSessionInfo("/tmp/project/sessions/active.jsonl");
-		const { ctx, calls } = createContext(activeSession.path);
+		const { ctx, calls, shownOverlays, overlayOptions } = createContext(activeSession.path);
 		vi.spyOn(SessionManager, "list").mockResolvedValue([activeSession]);
 		const deleteSessionWithArtifacts = vi
 			.spyOn(FileSessionStorage.prototype, "deleteSessionWithArtifacts")
@@ -165,10 +177,17 @@ describe("SelectorController session deletion", () => {
 		const controller = new SelectorController(ctx);
 
 		await controller.showSessionSelector();
-		const selector = ctx.editorContainer.children[0];
+		const selector = shownOverlays[0];
 		if (!(selector instanceof SessionSelectorComponent)) {
 			throw new Error("Expected session selector component");
 		}
+		expect(overlayOptions[0]).toEqual({
+			fullscreen: true,
+			anchor: "top-left",
+			width: "100%",
+			maxHeight: "100%",
+			margin: 0,
+		});
 
 		const sessionList = selector.getSessionList() as unknown as {
 			onDeleteRequest?: (session: SessionInfo) => void;
@@ -179,9 +198,7 @@ describe("SelectorController session deletion", () => {
 
 		expect(deleteSessionWithArtifacts).toHaveBeenCalledWith(activeSession.path);
 		expect(calls).toEqual([
-			"editorContainer.clear",
-			"editorContainer.addChild",
-			"ui.requestRender",
+			"ui.showOverlay",
 			"session.newSession",
 			"loadingAnimation.stop",
 			"statusContainer.clear",
@@ -202,7 +219,7 @@ describe("SelectorController session deletion", () => {
 
 	it("shows inline selector errors when session deletion fails after detach", async () => {
 		const activeSession = makeSessionInfo("/tmp/project/sessions/active.jsonl");
-		const { ctx, newSession } = createContext(activeSession.path);
+		const { ctx, newSession, shownOverlays } = createContext(activeSession.path);
 		vi.spyOn(SessionManager, "list").mockResolvedValue([activeSession]);
 		const deleteSessionWithArtifacts = vi
 			.spyOn(FileSessionStorage.prototype, "deleteSessionWithArtifacts")
@@ -210,7 +227,7 @@ describe("SelectorController session deletion", () => {
 		const controller = new SelectorController(ctx);
 
 		await controller.showSessionSelector();
-		const selector = ctx.editorContainer.children[0];
+		const selector = shownOverlays[0];
 		if (!(selector instanceof SessionSelectorComponent)) {
 			throw new Error("Expected session selector component");
 		}
@@ -265,9 +282,7 @@ describe("SelectorController session deletion", () => {
 			"ui.requestRender",
 			`delete:${activeSessionPath}`,
 			"showStatus:Session deleted",
-			"editorContainer.clear",
-			"editorContainer.addChild",
-			"ui.requestRender",
+			"ui.showOverlay",
 		]);
 	});
 });

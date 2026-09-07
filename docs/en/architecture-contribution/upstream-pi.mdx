@@ -14,6 +14,8 @@ The last proven sync with `can1357/oh-my-pi` was `d350ea60e` on April 9, 2026. T
 security and shared-runtime audit reviewed the divergent line through `b2f25dbfe1` on September 5,
 2026. The second-pass TUI and renderer audit extends that lineage through the frozen tip
 `6d3bc569d16cd7351073eaa767caed51021befbb` on September 6, 2026.
+The third-pass terminal-interaction audit extends the reviewed lineage through
+`a1b254047d12e143b7c6011536e918c6c35c5906`, also frozen on September 6, 2026.
 Because the repositories no longer share a usable linear history, accepted changes are semantic
 ports with adapted regressions rather than merges or ancestry-based cherry-picks.
 
@@ -28,6 +30,7 @@ The four implementation waves accepted these upstream pull requests:
 | Core runtime | #7743, #10415, #10523, #10325, and #10550 | #3723 |
 | Terminal and platform | #10613, #10997, #10492, #9233, and #7634 | #3724 |
 | TUI and renderer crash containment | #1989, #4497, #4529, #2047, #5837, and #6788 | #3743 |
+| Herdr, signals, and mouse interaction | #7810, #8433, #11054, #4121, #3463, #3402, and #11045 | #3748 |
 
 These ports protect provider-bound secrets and compaction boundaries, enforce exact-case
 environment references and complete protocol tails, repair Responses replay and shared MCP
@@ -40,6 +43,26 @@ The second-pass renderer work normalizes malformed task result data, accepts onl
 boundaries, bounds ANSI-heavy rows before width measurement, and treats terminal disconnect
 cleanup as best effort before SIGHUP. Upstream #5438 is equivalent because `Container.render()`
 already isolates child-render exceptions; its richer fallback display remains deferred.
+
+The third-pass work adds a shared fullscreen/mouse framework, applies it to the session picker,
+extension dashboard, and debug-log viewer, and keeps terminal state restoration idempotent across
+normal exit, resize, disconnect, and emergency cleanup. Herdr pane identity now participates in
+multiplexer redraw decisions, while notifications use validated argv-only `herdr notification show`
+delivery with terminal fallback. Interactive and signal exits share one draft-preserving teardown,
+and POSIX Ctrl-Z suspends only the xcsh process with `SIGSTOP`.
+
+| Third-pass candidate | Disposition |
+| --- | --- |
+| Herdr #7810, #8433, and #11054 | Ported: scrollback-safe rendering, resize behavior, and notification delivery |
+| Herdr #10356 and #10479 | Equivalent: explicit `HERDR_KITTY_GRAPHICS` gating and synchronized rendering already cover the behavior |
+| Herdr #7554 | Not applicable: xcsh uses its compiled executable and dedicated launcher |
+| Signal #4121 (`73a12c7e`) | Ported: shared idempotent teardown and one-shot draft recovery |
+| Signal #3463 (`8506fbdf`) | Ported: interactive self-`SIGSTOP`; deliberate background process-group `SIGTSTP` remains unchanged |
+| Mouse #3402 and #11045 | Ported: shared SGR parsing/routing and horizontal-wheel rejection |
+| `cffb804d`, `27ed9f7a`, and log-viewer portion of `5fbe8876` | Ported to the session picker, extension dashboard, and debug-log viewer |
+| `7eca774c` and raw-SSE portion of `5fbe8876` | Not applicable: those surfaces do not exist in xcsh |
+| Plan Review `2976847e` | Deferred: xcsh retains its compact plan-review selector |
+| MCP, OpenCode, and unrelated renderer/UI changes | Excluded from this pass |
 
 ## Where does xcsh deliberately diverge?
 
@@ -61,8 +84,9 @@ Upstream workflows, branding, release machinery, generated model catalogs, compa
 new packages, and large unrelated subsystems are excluded. The security-scan subsystem in #7048
 and the native minimizer in #2176 remain deferred. The range-dashboard optimization in #9327 and
 earendil-works/pi-only fullscreen transcript, mouse, clipboard, and renderer subsystems also remain
-outside this campaign. MCP, OpenCode, Herdr, #10625, and #10491 are explicitly excluded from the
-second-pass batch. Commits after the frozen source tip require a later audit.
+outside this campaign. MCP, OpenCode, Herdr, #10625, and #10491 were explicitly excluded from the
+second-pass batch; the Herdr work is now covered by the third pass. Commits after the new frozen
+source tip require a later audit.
 
 ## How do I decide where a fix belongs?
 

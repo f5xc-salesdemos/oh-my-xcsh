@@ -45,6 +45,8 @@ export class ExtensionList implements Component {
 	#focused = false;
 	#masterSwitchProvider: string | null = null;
 	#maxVisible: number;
+	#hoveredIndex: number | null = null;
+	#visibleCount = 0;
 
 	constructor(
 		private extensions: Extension[],
@@ -113,6 +115,7 @@ export class ExtensionList implements Component {
 
 	render(width: number): string[] {
 		const lines: string[] = [];
+		this.#visibleCount = 0;
 
 		// Search bar
 		const searchPrefix = theme.fg("muted", "Search: ");
@@ -137,14 +140,18 @@ export class ExtensionList implements Component {
 		for (let i = startIdx; i < endIdx; i++) {
 			const listItem = this.#listItems[i];
 			const isSelected = this.#focused && i === this.#selectedIndex;
+			const hovered = this.#focused && i === this.#hoveredIndex && !isSelected;
 
+			let rendered: string;
 			if (listItem.type === "master") {
-				lines.push(this.#renderMasterSwitch(listItem, isSelected, width));
+				rendered = this.#renderMasterSwitch(listItem, isSelected, width);
 			} else if (listItem.type === "kind-header") {
-				lines.push(this.#renderKindHeader(listItem, isSelected, width));
+				rendered = this.#renderKindHeader(listItem, isSelected, width);
 			} else {
-				lines.push(this.#renderExtensionRow(listItem.item, isSelected, width, masterDisabled));
+				rendered = this.#renderExtensionRow(listItem.item, isSelected, width, masterDisabled);
 			}
+			lines.push(hovered ? theme.bg("selectedBg", rendered) : rendered);
+			this.#visibleCount++;
 		}
 
 		// Scroll indicator
@@ -398,6 +405,42 @@ export class ExtensionList implements Component {
 		}
 	}
 
+	setHoverIndex(index: number | null): void {
+		this.#hoveredIndex = index;
+	}
+
+	hitTest(line: number): number | null {
+		const itemLine = line - 2;
+		if (itemLine < 0 || itemLine >= this.#visibleCount) return null;
+		return this.#scrollOffset + itemLine;
+	}
+
+	handleWheel(delta: -1 | 1): void {
+		if (delta < 0) this.#moveSelectionUp();
+		else this.#moveSelectionDown();
+	}
+
+	handleClick(line: number): void {
+		const index = this.hitTest(line);
+		if (index === null) return;
+		if (index !== this.#selectedIndex) {
+			this.#selectedIndex = index;
+			this.#notifySelectionChange();
+			return;
+		}
+		this.#activateSelected();
+	}
+
+	#activateSelected(): void {
+		const item = this.#listItems[this.#selectedIndex];
+		if (item?.type === "master") {
+			this.callbacks.onMasterToggle?.(item.providerId);
+		} else if (item?.type === "extension") {
+			const masterDisabled = this.#masterSwitchProvider !== null && !isProviderEnabled(this.#masterSwitchProvider);
+			if (!masterDisabled) this.callbacks.onToggle?.(item.item.id, item.item.state === "disabled");
+		}
+	}
+
 	handleInput(data: string): void {
 		// Navigation
 		if (matchesKey(data, "up") || data === "k") {
@@ -412,34 +455,13 @@ export class ExtensionList implements Component {
 
 		// Space: Toggle selected item
 		if (data === " ") {
-			const item = this.#listItems[this.#selectedIndex];
-			if (item?.type === "master") {
-				this.callbacks.onMasterToggle?.(item.providerId);
-			} else if (item?.type === "extension") {
-				// Only allow toggling if master is enabled
-				const masterDisabled =
-					this.#masterSwitchProvider !== null && !isProviderEnabled(this.#masterSwitchProvider);
-				if (!masterDisabled) {
-					const newEnabled = item.item.state === "disabled";
-					this.callbacks.onToggle?.(item.item.id, newEnabled);
-				}
-			}
+			this.#activateSelected();
 			return;
 		}
 
 		// Enter: Same as space - toggle selected item
 		if (matchesKey(data, "enter") || matchesKey(data, "return") || data === "\n") {
-			const item = this.#listItems[this.#selectedIndex];
-			if (item?.type === "master") {
-				this.callbacks.onMasterToggle?.(item.providerId);
-			} else if (item?.type === "extension") {
-				const masterDisabled =
-					this.#masterSwitchProvider !== null && !isProviderEnabled(this.#masterSwitchProvider);
-				if (!masterDisabled) {
-					const newEnabled = item.item.state === "disabled";
-					this.callbacks.onToggle?.(item.item.id, newEnabled);
-				}
-			}
+			this.#activateSelected();
 			return;
 		}
 

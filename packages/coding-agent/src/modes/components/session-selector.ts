@@ -2,9 +2,11 @@ import {
 	type Component,
 	Container,
 	Input,
+	type MouseRoutable,
 	matchesKey,
 	padding,
 	replaceTabs,
+	type SgrMouseEvent,
 	Spacer,
 	Text,
 	truncateToWidth,
@@ -27,13 +29,14 @@ class SessionList implements Component {
 	onSelect?: (sessionPath: string) => void;
 	onCancel?: () => void;
 	onExit: () => void = () => {};
-	#maxVisible: number = 5; // Max sessions visible (each session is 3 lines: msg + metadata + blank)
+	#hitRows: (number | undefined)[] = [];
 
 	onDeleteRequest?: (session: SessionInfo) => void;
 
 	constructor(
 		private readonly allSessions: SessionInfo[],
 		private readonly showCwd = false,
+		private readonly getTerminalRows: () => number = () => 24,
 	) {
 		this.#filteredSessions = allSessions;
 		this.#searchInput = new Input();
@@ -47,6 +50,25 @@ class SessionList implements Component {
 				}
 			}
 		};
+	}
+
+	#maxVisible(): number {
+		return Math.max(2, Math.floor((this.getTerminalRows() - 13) / 4));
+	}
+
+	hitTest(line: number): number | undefined {
+		return this.#hitRows[line];
+	}
+
+	handleWheel(delta: -1 | 1): void {
+		this.#selectedIndex = Math.max(0, Math.min(this.#filteredSessions.length - 1, this.#selectedIndex + delta));
+	}
+
+	selectAndConfirm(index: number): void {
+		const session = this.#filteredSessions[index];
+		if (!session) return;
+		this.#selectedIndex = index;
+		this.onSelect?.(session.path);
 	}
 
 	#filterSessions(query: string): void {
@@ -82,6 +104,7 @@ class SessionList implements Component {
 
 	render(width: number): string[] {
 		const lines: string[] = [];
+		this.#hitRows = [];
 
 		// Render search input
 		lines.push(...this.#searchInput.render(width));
@@ -118,17 +141,16 @@ class SessionList implements Component {
 		};
 
 		// Calculate visible range with scrolling
+		const maxVisible = this.#maxVisible();
 		const startIndex = Math.max(
 			0,
-			Math.min(
-				this.#selectedIndex - Math.floor(this.#maxVisible / 2),
-				this.#filteredSessions.length - this.#maxVisible,
-			),
+			Math.min(this.#selectedIndex - Math.floor(maxVisible / 2), this.#filteredSessions.length - maxVisible),
 		);
-		const endIndex = Math.min(startIndex + this.#maxVisible, this.#filteredSessions.length);
+		const endIndex = Math.min(startIndex + maxVisible, this.#filteredSessions.length);
 
 		// Render visible sessions (2-3 lines per session + blank line)
 		for (let i = startIndex; i < endIndex; i++) {
+			const rowStart = lines.length;
 			const session = this.#filteredSessions[i];
 			const isSelected = i === this.#selectedIndex;
 
@@ -164,7 +186,8 @@ class SessionList implements Component {
 			const metadataLine = theme.fg("dim", truncateToWidth(metadata, width));
 
 			lines.push(metadataLine);
-			lines.push(""); // Blank line between sessions
+			for (let row = rowStart; row < lines.length; row++) this.#hitRows[row] = i;
+			lines.push(""); // Blank separator is intentionally not clickable.
 		}
 
 		// Add scroll indicator if needed
@@ -173,10 +196,6 @@ class SessionList implements Component {
 			const scrollInfo = theme.fg("muted", truncateToWidth(scrollText, width));
 			lines.push(scrollInfo);
 		}
-
-		// Add keybinding hint
-		lines.push("");
-		lines.push(theme.fg("muted", "  [Del to delete, Enter to select, Esc to cancel]"));
 
 		return lines;
 	}
@@ -203,12 +222,12 @@ class SessionList implements Component {
 		}
 		// Page up - jump up by maxVisible items
 		if (matchesKey(keyData, "pageUp")) {
-			this.#selectedIndex = Math.max(0, this.#selectedIndex - this.#maxVisible);
+			this.#selectedIndex = Math.max(0, this.#selectedIndex - this.#maxVisible());
 			return;
 		}
 		// Page down - jump down by maxVisible items
 		if (matchesKey(keyData, "pageDown")) {
-			this.#selectedIndex = Math.min(this.#filteredSessions.length - 1, this.#selectedIndex + this.#maxVisible);
+			this.#selectedIndex = Math.min(this.#filteredSessions.length - 1, this.#selectedIndex + this.#maxVisible());
 			return;
 		}
 		// Enter
@@ -237,15 +256,25 @@ class SessionList implements Component {
 	}
 }
 
+export interface SessionSelectorOptions {
+	fillHeight?: boolean;
+	getTerminalRows?: () => number;
+}
+
 /**
  * Component that renders a session selector with optional confirmation dialog
  */
-export class SessionSelectorComponent extends Container {
+export class SessionSelectorComponent extends Container implements MouseRoutable {
 	#sessionList: SessionList;
 	#confirmationDialog: HookSelectorComponent | null = null;
 	#messageContainer: Container;
 	#onDelete?: (session: SessionInfo) => Promise<boolean>;
 	#onRequestRender?: () => void;
+	#listLineOffset = 0;
+	#footerStart = 0;
+	readonly #fillHeight: boolean;
+	readonly #getTerminalRows: () => number;
+	readonly #bottomBorder = new DynamicBorder();
 
 	constructor(
 		sessions: SessionInfo[],
@@ -253,11 +282,14 @@ export class SessionSelectorComponent extends Container {
 		onCancel: () => void,
 		onExit: () => void,
 		onDelete?: (session: SessionInfo) => Promise<boolean>,
+		options: SessionSelectorOptions = {},
 	) {
 		super();
 
 		this.#messageContainer = new Container();
 		this.#onDelete = onDelete;
+		this.#fillHeight = options.fillHeight ?? false;
+		this.#getTerminalRows = options.getTerminalRows ?? (() => 24);
 		// Add header
 		this.addChild(new Spacer(1));
 		this.addChild(new Text(theme.bold("Resume Session"), 1, 0));
@@ -266,7 +298,7 @@ export class SessionSelectorComponent extends Container {
 		this.addChild(new Spacer(1));
 		this.addChild(this.#messageContainer);
 		// Create session list
-		this.#sessionList = new SessionList(sessions);
+		this.#sessionList = new SessionList(sessions, false, this.#getTerminalRows);
 		this.#sessionList.onSelect = onSelect;
 		this.#sessionList.onCancel = onCancel;
 		this.#sessionList.onExit = onExit;
@@ -274,10 +306,29 @@ export class SessionSelectorComponent extends Container {
 			this.#showDeleteConfirmation(session);
 		};
 		this.addChild(this.#sessionList);
+	}
 
-		// Add bottom border
-		this.addChild(new Spacer(1));
-		this.addChild(new DynamicBorder());
+	override render(width: number): string[] {
+		const lines: string[] = [];
+		for (const child of this.children) {
+			if (this.#confirmationDialog && child === this.#sessionList) continue;
+			if (child === this.#sessionList) this.#listLineOffset = lines.length;
+			lines.push(...child.render(width));
+		}
+		const footer = [
+			"",
+			theme.fg("muted", "  [Del to delete, Enter to select, Esc to cancel]"),
+			"",
+			...this.#bottomBorder.render(width),
+		];
+		if (this.#fillHeight) {
+			const target = Math.max(0, this.#getTerminalRows() - footer.length);
+			if (lines.length > target) lines.length = target;
+			else while (lines.length < target) lines.push("");
+		}
+		this.#footerStart = lines.length;
+		lines.push(...footer);
+		return lines;
 	}
 
 	setOnRequestRender(callback: () => void): void {
@@ -335,6 +386,17 @@ export class SessionSelectorComponent extends Container {
 		} else {
 			this.#sessionList.handleInput(keyData);
 		}
+	}
+
+	routeMouse(event: SgrMouseEvent, _line: number, _col: number): void {
+		if (this.#confirmationDialog) return;
+		if (event.wheel !== null) {
+			this.#sessionList.handleWheel(event.wheel);
+			return;
+		}
+		if (!event.leftClick || event.row >= this.#footerStart) return;
+		const index = this.#sessionList.hitTest(event.row - this.#listLineOffset);
+		if (index !== undefined) this.#sessionList.selectAndConfirm(index);
 	}
 
 	getSessionList(): SessionList {

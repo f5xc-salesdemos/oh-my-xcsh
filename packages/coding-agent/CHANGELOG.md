@@ -40,6 +40,14 @@
 
 ### Fixed
 
+- Made the session picker, extension dashboard, and debug-log viewer fullscreen and mouse-aware while
+  retaining their keyboard behavior, pinned chrome, and non-action row semantics
+  ([#3748](https://github.com/f5-sales-demo/xcsh/issues/3748)).
+- Persisted unsent editor drafts for one-shot resume recovery, unified interactive and signal-driven
+  teardown, made session disposal idempotent, and restored POSIX Ctrl-Z suspension with self-`SIGSTOP`.
+  Semantically ported from [can1357/oh-my-pi#4121](https://github.com/can1357/oh-my-pi/pull/4121)
+  and [#3463](https://github.com/can1357/oh-my-pi/pull/3463)
+  ([#3748](https://github.com/f5-sales-demo/xcsh/issues/3748)).
 - Prevented malformed task `submit_result` data, non-string write content, and invalid renderer path
   values from crashing task, read, write, edit, inspect-image, or browser output. Semantically
   ported from [can1357/oh-my-pi#1989](https://github.com/can1357/oh-my-pi/pull/1989),
