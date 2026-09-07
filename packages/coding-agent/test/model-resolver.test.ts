@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { createThinkingConfig, Effort, type Model } from "@f5-sales-demo/pi-ai";
+import { createThinkingConfig, Effort, getBundledModel, type Model } from "@f5-sales-demo/pi-ai";
 import {
 	expandRoleAlias,
 	parseModelPattern,
@@ -10,6 +10,7 @@ import {
 	resolveModelOverride,
 	resolveModelRoleValue,
 	resolveProviderModelReference,
+	restoreModelFromSession,
 } from "../src/config/model-resolver";
 import { Settings } from "../src/config/settings";
 
@@ -402,6 +403,26 @@ describe("resolveModelFromString", () => {
 		const resolved = resolveModelFromString("openrouter/qwen/qwen3-coder:exacto", allModels);
 		expect(resolved?.provider).toBe("openrouter");
 		expect(resolved?.id).toBe("qwen/qwen3-coder:exacto");
+	});
+});
+
+describe("restoreModelFromSession", () => {
+	test("falls back from a removed Vertex Gemini 3.7 session to the 3.8 provider default", async () => {
+		const vertexDefault = getBundledModel("google-vertex", "gemini-3.8-flash");
+		if (!vertexDefault) throw new Error("Expected bundled Gemini 3.8 Flash");
+		const available = [vertexDefault];
+
+		const result = await restoreModelFromSession("google-vertex", "gemini-3.7-flash", undefined, false, {
+			find: (provider: string, id: string) =>
+				available.find(model => model.provider === provider && model.id === id),
+			getAvailable: () => available,
+			getApiKey: async () => "authorized-test-token",
+		} as never);
+
+		expect(result.model).toBe(vertexDefault);
+		expect(result.fallbackMessage).toContain(
+			"Could not restore model google-vertex/gemini-3.7-flash (model no longer exists). Using google-vertex/gemini-3.8-flash.",
+		);
 	});
 });
 

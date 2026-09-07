@@ -238,7 +238,7 @@ describe("AgentSession role model thinking behavior", () => {
 	});
 
 	it("omits inherited effort while preserving supported Vertex overrides", () => {
-		const flash = getBundledModel("google-vertex", "gemini-3.7-flash");
+		const flash = getBundledModel("google-vertex", "gemini-3.8-flash");
 		const pro = getBundledModel("google-vertex", "gemini-3-pro-preview");
 		const lite = getBundledModel("google-vertex", "gemini-2.5-flash-lite");
 
@@ -253,7 +253,7 @@ describe("AgentSession role model thinking behavior", () => {
 
 	it("rejects off atomically when switching to Vertex Gemini 3", async () => {
 		const initialModel = getAnthropicModelOrThrow("claude-sonnet-4-5");
-		const targetModel = getBundledModel("google-vertex", "gemini-3.7-flash");
+		const targetModel = getBundledModel("google-vertex", "gemini-3.8-flash");
 		const agent = new Agent({
 			initialState: {
 				model: initialModel,
@@ -280,7 +280,7 @@ describe("AgentSession role model thinking behavior", () => {
 		const previousThinkingLevel = session.thinkingLevel;
 
 		await expect(session.setModel(targetModel, "default", { thinkingLevel: "off" })).rejects.toThrow(
-			/cannot disable thinking.*google-vertex\/gemini-3\.7-flash/i,
+			/cannot disable thinking.*google-vertex\/gemini-3\.8-flash/i,
 		);
 		expect(session.model?.id).toBe(initialModel.id);
 		expect(session.thinkingLevel).toBe(previousThinkingLevel);
@@ -290,7 +290,7 @@ describe("AgentSession role model thinking behavior", () => {
 
 	it("omits inherited effort when switching and lets a saved exact effort win", async () => {
 		const initialModel = getAnthropicModelOrThrow("claude-sonnet-4-5");
-		const targetModel = getBundledModel("google-vertex", "gemini-3.7-flash");
+		const targetModel = getBundledModel("google-vertex", "gemini-3.8-flash");
 		const agent = new Agent({
 			initialState: {
 				model: initialModel,

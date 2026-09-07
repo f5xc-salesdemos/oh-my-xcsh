@@ -450,7 +450,7 @@ export async function resolveGoogleVertexProject(
 }
 
 export function resolveGoogleVertexLocation(options?: GoogleVertexOptions): string {
-	// Gemini 3.7 Flash Corporate is served through the global endpoint only.
+	// Gemini 3.8 Flash Corporate is served through the global endpoint only.
 	// Ignore inherited provider/environment locations so a request cannot drift.
 	void options;
 	return "global";
@@ -484,28 +484,31 @@ export function buildGoogleVertexParams(
 	options: GoogleVertexOptions = {},
 ): GenerateContentParameters {
 	const contents = convertMessages(model, context);
-	const isGemini37Flash = model.id === "gemini-3.7-flash";
+	const isGemini38Flash = model.id === "gemini-3.8-flash";
+	if (isGemini38Flash && options.thinking?.level === "MINIMAL") {
+		throw new Error("MINIMAL thinking is not supported by Gemini 3.8 Flash");
+	}
 
 	const generationConfig: GoogleVertexSamplingConfig = {};
-	if (!isGemini37Flash && options.temperature !== undefined) {
+	if (!isGemini38Flash && options.temperature !== undefined) {
 		generationConfig.temperature = options.temperature;
 	}
 	if (options.maxTokens !== undefined) {
 		generationConfig.maxOutputTokens = options.maxTokens;
 	}
-	if (!isGemini37Flash && options.topP !== undefined) {
+	if (!isGemini38Flash && options.topP !== undefined) {
 		generationConfig.topP = options.topP;
 	}
-	if (!isGemini37Flash && options.topK !== undefined) {
+	if (!isGemini38Flash && options.topK !== undefined) {
 		generationConfig.topK = options.topK;
 	}
-	if (!isGemini37Flash && options.minP !== undefined) {
+	if (!isGemini38Flash && options.minP !== undefined) {
 		generationConfig.minP = options.minP;
 	}
-	if (!isGemini37Flash && options.presencePenalty !== undefined) {
+	if (!isGemini38Flash && options.presencePenalty !== undefined) {
 		generationConfig.presencePenalty = options.presencePenalty;
 	}
-	if (!isGemini37Flash && options.repetitionPenalty !== undefined) {
+	if (!isGemini38Flash && options.repetitionPenalty !== undefined) {
 		generationConfig.repetitionPenalty = options.repetitionPenalty;
 	}
 
@@ -527,11 +530,11 @@ export function buildGoogleVertexParams(
 		config.toolConfig = undefined;
 	}
 
-	if (model.reasoning && (options.thinking?.enabled || isGemini37Flash)) {
+	if (model.reasoning && (options.thinking?.enabled || isGemini38Flash)) {
 		const cfg: ThinkingConfig = { includeThoughts: true };
 		if (options.thinking?.level !== undefined) {
 			cfg.thinkingLevel = THINKING_LEVEL_MAP[options.thinking.level];
-		} else if (isGemini37Flash) {
+		} else if (isGemini38Flash) {
 			cfg.thinkingLevel = ThinkingLevel.HIGH;
 		} else if (options.thinking?.budgetTokens !== undefined) {
 			cfg.thinkingBudget = options.thinking.budgetTokens;

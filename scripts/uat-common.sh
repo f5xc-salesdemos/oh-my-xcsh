@@ -34,3 +34,19 @@ uat_stage_credentials() {
   chmod 0700 "$destination_dir"
   cp -a "$source_dir/." "$destination_dir/"
 }
+
+uat_vertex_endpoint() {
+  local model="$1"
+  local project="$2"
+  local location="$3"
+  local host
+
+  if [ "$location" = "global" ]; then
+    host="aiplatform.googleapis.com"
+  else
+    host="${location}-aiplatform.googleapis.com"
+  fi
+
+  printf 'https://%s/v1/projects/%s/locations/%s/publishers/google/models/%s:generateContent\n' \
+    "$host" "$project" "$location" "$model"
+}

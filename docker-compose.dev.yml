@@ -39,6 +39,6 @@ services:
       HOME: /home/xcsh
       AZURE_CONFIG_DIR: /tmp/xcsh-azure
       CLOUDSDK_CONFIG: /tmp/xcsh-gcloud
-      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.1-pro-preview}
-      VERTEX_AI_LOCATION: ${VERTEX_AI_LOCATION:-us-central1}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.8-flash}
+      VERTEX_AI_LOCATION: ${VERTEX_AI_LOCATION:-global}
       VERTEX_AI_PROJECT: ${VERTEX_AI_PROJECT:-}

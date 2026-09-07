@@ -41,6 +41,7 @@ describe("first-run provider onboarding", () => {
 			rendered.indexOf("ChatGPT Plus/Pro (Codex Subscription)"),
 		);
 		expect(rendered).toContain("Enterprise Vertex subscription · browser sign-in");
+		expect(rendered).toContain("Gemini 3.8 Flash HIGH");
 		const enterprise = getOAuthProviders().find(provider => provider.id === "google-antigravity-enterprise");
 		expect(getOAuthProviders().some(provider => provider.id === "google-vertex")).toBe(false);
 		expect(getLoginOptions()[0]).toMatchObject({ id: "google-vertex", kind: "local" });

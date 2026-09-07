@@ -35,7 +35,7 @@ describe("Corporate Vertex session runtime options", () => {
 	afterEach(() => clearCustomApis());
 
 	it("sends only the isolated Vertex OAuth token and confirmed project to the provider", async () => {
-		const model = { ...getBundledModel("google-vertex", "gemini-3.7-flash"), api: "custom-vertex-capture" };
+		const model = { ...getBundledModel("google-vertex", "gemini-3.8-flash"), api: "custom-vertex-capture" };
 		const settings = Settings.isolated({
 			"providers.vertexProject": "confirmed-project",
 			"providers.vertexLocation": "europe-west4",
@@ -88,7 +88,7 @@ describe("Corporate Vertex session runtime options", () => {
 	});
 
 	it("rejects a Vertex request before the provider when no project was confirmed", async () => {
-		const model = { ...getBundledModel("google-vertex", "gemini-3.7-flash"), api: "custom-vertex-capture" };
+		const model = { ...getBundledModel("google-vertex", "gemini-3.8-flash"), api: "custom-vertex-capture" };
 		const { session } = await createAgentSession({
 			model: model as never,
 			modelRegistry: {

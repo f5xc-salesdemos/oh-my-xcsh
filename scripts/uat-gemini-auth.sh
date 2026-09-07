@@ -5,8 +5,8 @@ SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # shellcheck source=scripts/uat-common.sh
 source "${SCRIPT_DIR}/uat-common.sh"
 
-MODEL=${GEMINI_MODEL:-gemini-3.1-pro-preview}
-LOCATION=${VERTEX_AI_LOCATION:-us-central1}
+MODEL=${GEMINI_MODEL:-gemini-3.8-flash}
+LOCATION=${VERTEX_AI_LOCATION:-global}
 session_dir=$(uat_make_session gcloud)
 trap 'uat_cleanup_session "$session_dir"' EXIT
 
@@ -28,7 +28,7 @@ payload_file="${session_dir}/request.json"
 response_file="${session_dir}/response.json"
 jq -n '{contents: [{role: "user", parts: [{text: "Reply with the word verified."}]}]}' >"$payload_file"
 
-endpoint="https://${LOCATION}-aiplatform.googleapis.com/v1/projects/${project}/locations/${LOCATION}/publishers/google/models/${MODEL}:generateContent"
+endpoint=$(uat_vertex_endpoint "$MODEL" "$project" "$LOCATION")
 echo "Verifying the configured Vertex AI model..."
 if ! curl --fail-with-body --silent --show-error \
   --connect-timeout 15 --max-time 120 \

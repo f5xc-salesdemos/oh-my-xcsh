@@ -12,7 +12,7 @@ export function getLoginOptions(): LoginOption[] {
 			id: "google-vertex",
 			kind: "local",
 			name: "Google Cloud Vertex AI (Corporate)",
-			description: "Enterprise Vertex subscription · browser sign-in · Gemini 3.7 Flash HIGH",
+			description: "Enterprise Vertex subscription · browser sign-in · Gemini 3.8 Flash HIGH",
 			available: true,
 			loginOrder: -100,
 		},

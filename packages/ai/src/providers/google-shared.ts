@@ -65,7 +65,7 @@ function resolveThoughtSignature(isSameProviderAndModel: boolean, signature: str
  * Models with strict Google tool round trips require explicit matching call/response IDs.
  */
 export function requiresToolCallId(modelId: string): boolean {
-	return modelId.startsWith("claude-") || modelId === "gemini-3.7-flash";
+	return modelId.startsWith("claude-") || modelId === "gemini-3.8-flash";
 }
 
 function getGeminiMajorVersion(modelId: string): number | undefined {
@@ -177,7 +177,7 @@ export function convertMessages<T extends GoogleApiType>(model: Model<T>, contex
 							...(requiresToolCallId(model.id) ? { id: block.id } : {}),
 						},
 					};
-					if (model.provider === "google-vertex" && model.id !== "gemini-3.7-flash" && part?.functionCall?.id) {
+					if (model.provider === "google-vertex" && model.id !== "gemini-3.8-flash" && part?.functionCall?.id) {
 						delete part.functionCall.id; // Vertex AI does not support 'id' in functionCall
 					}
 					if (effectiveSignature) {
@@ -230,7 +230,7 @@ export function convertMessages<T extends GoogleApiType>(model: Model<T>, contex
 
 			if (
 				model.provider === "google-vertex" &&
-				model.id !== "gemini-3.7-flash" &&
+				model.id !== "gemini-3.8-flash" &&
 				functionResponsePart.functionResponse?.id
 			) {
 				delete functionResponsePart.functionResponse.id; // Vertex AI does not support 'id' in functionResponse
