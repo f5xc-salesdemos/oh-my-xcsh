@@ -5,6 +5,7 @@
 import {
 	type AssistantMessage,
 	type AssistantMessageEvent,
+	type AssistantMessagePhase,
 	type Context,
 	EventStream,
 	type Model,
@@ -34,9 +35,9 @@ class ProxyMessageEventStream extends EventStream<AssistantMessageEvent, Assista
  */
 export type ProxyAssistantMessageEvent =
 	| { type: "start" }
-	| { type: "text_start"; contentIndex: number }
+	| { type: "text_start"; contentIndex: number; phase?: AssistantMessagePhase }
 	| { type: "text_delta"; contentIndex: number; delta: string }
-	| { type: "text_end"; contentIndex: number; contentSignature?: string }
+	| { type: "text_end"; contentIndex: number; contentSignature?: string; phase?: AssistantMessagePhase }
 	| { type: "thinking_start"; contentIndex: number }
 	| { type: "thinking_delta"; contentIndex: number; delta: string }
 	| { type: "thinking_end"; contentIndex: number; contentSignature?: string }
@@ -205,8 +206,17 @@ function processProxyEvent(
 			return { type: "start", partial };
 
 		case "text_start":
-			partial.content[proxyEvent.contentIndex] = { type: "text", text: "" };
-			return { type: "text_start", contentIndex: proxyEvent.contentIndex, partial };
+			partial.content[proxyEvent.contentIndex] = {
+				type: "text",
+				text: "",
+				phase: proxyEvent.phase ?? "final_answer",
+			};
+			return {
+				type: "text_start",
+				contentIndex: proxyEvent.contentIndex,
+				phase: proxyEvent.phase ?? "final_answer",
+				partial,
+			};
 
 		case "text_delta": {
 			const content = partial.content[proxyEvent.contentIndex];
@@ -226,10 +236,12 @@ function processProxyEvent(
 			const content = partial.content[proxyEvent.contentIndex];
 			if (content?.type === "text") {
 				content.textSignature = proxyEvent.contentSignature;
+				content.phase = proxyEvent.phase ?? content.phase ?? "final_answer";
 				return {
 					type: "text_end",
 					contentIndex: proxyEvent.contentIndex,
 					content: content.text,
+					phase: content.phase,
 					partial,
 				};
 			}

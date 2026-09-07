@@ -107,4 +107,35 @@ describe("EventController idle compaction teardown", () => {
 		expect(setTurnPhase).toHaveBeenCalledWith("tool_call");
 		expect(JSON.stringify(setTurnPhase.mock.calls)).not.toContain("toolCallId");
 	});
+
+	it("restores the working indicator after commentary completes", async () => {
+		const message = createAssistantMessage();
+		message.content = [{ type: "text", text: "Checking.", phase: "commentary" }];
+		const setThinkingMode = vi.fn();
+		const context = {
+			isInitialized: true,
+			streamingComponent: { updateContent: vi.fn() },
+			streamingMessage: message,
+			streamingAssistantGutter: { setThinkingMode },
+			pendingTools: new Map(),
+			ui: { requestRender: vi.fn() },
+			statusLine: { invalidate: vi.fn() },
+			updateEditorTopBorder: vi.fn(),
+		} as unknown as InteractiveModeContext;
+		const controller = new EventController(context);
+
+		await controller.handleEvent({
+			type: "message_update",
+			message,
+			assistantMessageEvent: {
+				type: "text_end",
+				contentIndex: 0,
+				content: "Checking.",
+				phase: "commentary",
+				partial: message,
+			},
+		});
+
+		expect(setThinkingMode).toHaveBeenCalledTimes(1);
+	});
 });

@@ -221,6 +221,12 @@ export class EventController {
 				if (this.ctx.streamingComponent && event.message.role === "assistant") {
 					this.ctx.streamingMessage = event.message;
 					this.ctx.streamingComponent.updateContent(this.ctx.streamingMessage);
+					if (
+						event.assistantMessageEvent.type === "text_end" &&
+						event.assistantMessageEvent.phase === "commentary"
+					) {
+						this.ctx.streamingAssistantGutter?.setThinkingMode();
+					}
 
 					const thinkingCount = this.ctx.streamingMessage.content.filter(
 						content => content.type === "thinking" && content.thinking.trim(),

@@ -131,7 +131,7 @@ describe("chat-conformance: xcsh outbound frames validate against schemas", () =
 	});
 
 	it("chat_delta frame validates", () => {
-		const frame = { type: "chat_delta", id: "c-test", seq: 0, delta: "hello" };
+		const frame = { type: "chat_delta", id: "c-test", itemId: "a1", seq: 0, delta: "hello" };
 		const validate = ajv.compile(schemas.chat_delta);
 		expect(validate(frame)).toBe(true);
 	});

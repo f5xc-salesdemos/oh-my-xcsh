@@ -1,6 +1,6 @@
 {
   "version": "0.1.0",
-  "contractVersion": "2.1.0",
+  "contractVersion": "2.2.0",
   "multiPortDiscovery": true,
   "protocol": "tool_request/result",
   "tools": [
@@ -758,7 +758,9 @@
       ],
       "messages": [
         "chat_request",
+        "chat_message_start",
         "chat_delta",
+        "chat_message_end",
         "chat_done",
         "chat_error",
         "chat_stop",
@@ -775,7 +777,7 @@
         "media_asset_chunk",
         "media_asset_error"
       ],
-      "description": "User ↔ xcsh chat over the bridge. The extension side panel sends chat_request (with mode and page-context snapshot); xcsh streams chat_delta tokens then a terminal chat_done (with reference links) or chat_error. Chat ids are prefixed \"c-\". Tool calls during a turn use the normal tool_request flow. chat_stop halts a streaming response. chat_tool_notice is emitted by the EXTENSION (the service worker) to the panel as a best-effort UI signal when a tool runs during a turn — it is NOT sent by xcsh; xcsh must not produce it to avoid double-rendering in the panel. Rich media uses chat_media descriptors and bounded media_asset_read/media_asset_chunk exchanges; media_asset_error reports unavailable assets.",
+      "description": "User ↔ xcsh chat over the bridge. The extension side panel sends chat_request (with mode and page-context snapshot); xcsh streams ordered assistant items using chat_message_start, correlated chat_delta tokens, and chat_message_end. Each item declares commentary or final_answer phase. Exactly one terminal chat_done (with reference links) or chat_error closes the whole turn. Chat ids are prefixed \"c-\". Tool calls during a turn use the normal tool_request flow. chat_stop halts a streaming response. chat_tool_notice is emitted by the EXTENSION (the service worker) to the panel as a best-effort UI signal when a tool runs during a turn — it is NOT sent by xcsh; xcsh must not produce it to avoid double-rendering in the panel. Rich media uses chat_media descriptors and bounded media_asset_read/media_asset_chunk exchanges; media_asset_error reports unavailable assets.",
       "promptHints": {
         "role": "You are xcsh, the AI assistant embedded in the F5 Distributed Cloud (XC) console side panel. The user is viewing a live console page; help them drive automation and understand settings and their purpose.",
         "grounding": "Every user message carries a page-context snapshot: url/path, title, a trimmed accessibility tree, and — when available — the live XC API resource JSON the page loaded (context.api.body). Treat context.api.body as the authoritative current state of the resource and ground answers in it instead of guessing; respect the truncated flags.",

@@ -258,10 +258,12 @@ export type StreamFunction<TApi extends Api> = (
 	options: OptionsForApi<TApi>,
 ) => AssistantMessageEventStream;
 
+export type AssistantMessagePhase = "commentary" | "final_answer";
+
 export interface TextSignatureV1 {
 	v: 1;
 	id: string;
-	phase?: "commentary" | "final_answer";
+	phase?: AssistantMessagePhase;
 }
 
 /**
@@ -288,6 +290,8 @@ export interface WebCitation {
 export interface TextContent {
 	type: "text";
 	text: string;
+	/** Semantic role supplied by Responses. Absence has final-answer semantics. */
+	phase?: AssistantMessagePhase;
 	textSignature?: string; // e.g., for OpenAI responses, message metadata (legacy id string or TextSignatureV1 JSON)
 	/** Structured citations for this span, when the provider ran a server-side search. */
 	citations?: WebCitation[];
@@ -468,9 +472,15 @@ export interface Context {
 
 export type AssistantMessageEvent =
 	| { type: "start"; contentIndex?: undefined; partial: AssistantMessage }
-	| { type: "text_start"; contentIndex: number; partial: AssistantMessage }
+	| { type: "text_start"; contentIndex: number; phase?: AssistantMessagePhase; partial: AssistantMessage }
 	| { type: "text_delta"; contentIndex: number; delta: string; partial: AssistantMessage }
-	| { type: "text_end"; contentIndex: number; content: string; partial: AssistantMessage }
+	| {
+			type: "text_end";
+			contentIndex: number;
+			content: string;
+			phase?: AssistantMessagePhase;
+			partial: AssistantMessage;
+	  }
 	| { type: "thinking_start"; contentIndex: number; partial: AssistantMessage }
 	| { type: "thinking_delta"; contentIndex: number; delta: string; partial: AssistantMessage }
 	| { type: "thinking_end"; contentIndex: number; content: string; partial: AssistantMessage }

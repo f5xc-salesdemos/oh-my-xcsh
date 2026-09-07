@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { AssistantMessage, ImageContent } from "@f5-sales-demo/pi-ai";
+import type { AssistantMessage, AssistantMessagePhase, ImageContent } from "@f5-sales-demo/pi-ai";
 import { parseModelString } from "../config/model-resolver";
 import { settings } from "../config/settings";
 import { DEFAULT_MODEL_ROLE } from "../config/settings-schema";
@@ -29,6 +29,8 @@ import {
 	type ChatErrorReason,
 	type ChatKeepalive,
 	type ChatMedia,
+	type ChatMessageEnd,
+	type ChatMessageStart,
 	type ChatRequest,
 	type Configure,
 	type ConfigureAck,
@@ -77,7 +79,8 @@ export function shouldSendKeepalive(nowMs: number, lastKeepaliveAt: number): boo
 
 interface ActiveChat {
 	id: string;
-	seq: number;
+	items: Map<number, { itemId: string; phase: AssistantMessagePhase; seq: number }>;
+	nextItem: number;
 	terminalSent: boolean;
 	unsubscribe: () => void;
 	entryAt: number;
@@ -215,7 +218,8 @@ export class ChatHandler {
 
 		const chat: ActiveChat = {
 			id,
-			seq: 0,
+			items: new Map(),
+			nextItem: 0,
 			terminalSent: false,
 			unsubscribe: () => {},
 			entryAt: Date.now(),
@@ -359,11 +363,44 @@ export class ChatHandler {
 
 		if (event.type === "message_update" && "assistantMessageEvent" in event) {
 			const ame = event.assistantMessageEvent;
-			if (ame.type === "text_delta") {
+			if (ame.type === "text_start") {
+				const item = {
+					itemId: `${chat.id}:assistant:${chat.nextItem++}`,
+					phase: ame.phase ?? "final_answer",
+					seq: 0,
+				};
+				chat.items.set(ame.contentIndex, item);
+				this.#server.send({
+					type: "chat_message_start",
+					id: chat.id,
+					itemId: item.itemId,
+					phase: item.phase,
+				} satisfies ChatMessageStart);
+			} else if (ame.type === "text_delta") {
+				let item = chat.items.get(ame.contentIndex);
+				if (!item) {
+					// Legacy/synthetic streams can omit text_start (and older test or proxy
+					// emitters can omit partial entirely). Keep that compatibility path
+					// deterministic: missing metadata has final-answer semantics.
+					const content = ame.partial?.content?.[ame.contentIndex];
+					item = {
+						itemId: `${chat.id}:assistant:${chat.nextItem++}`,
+						phase: content?.type === "text" && content.phase === "commentary" ? "commentary" : "final_answer",
+						seq: 0,
+					};
+					chat.items.set(ame.contentIndex, item);
+					this.#server.send({
+						type: "chat_message_start",
+						id: chat.id,
+						itemId: item.itemId,
+						phase: item.phase,
+					} satisfies ChatMessageStart);
+				}
 				this.#server.send({
 					type: "chat_delta",
 					id: chat.id,
-					seq: chat.seq++,
+					itemId: item.itemId,
+					seq: item.seq++,
 					delta: ame.delta,
 				} satisfies ChatDelta);
 				// TTFT Phase 2: first token out — emit the chat-segment spans once, keyed by
@@ -374,6 +411,18 @@ export class ChatHandler {
 					for (const s of chatSpans(chat.id, chat.entryAt, chat.promptAt, Date.now())) {
 						this.#server.send(s);
 					}
+				}
+			} else if (ame.type === "text_end") {
+				const item = chat.items.get(ame.contentIndex);
+				if (item) {
+					item.phase = ame.phase ?? item.phase;
+					this.#server.send({
+						type: "chat_message_end",
+						id: chat.id,
+						itemId: item.itemId,
+						phase: item.phase,
+					} satisfies ChatMessageEnd);
+					chat.items.delete(ame.contentIndex);
 				}
 			} else if (ame.type === "thinking_delta") {
 				// LIVENESS: the model is streaming extended thinking before any visible
