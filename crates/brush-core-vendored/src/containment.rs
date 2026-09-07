@@ -7,11 +7,11 @@
 //!
 //! It is deliberately permissive. Anything matched by no root is outside the fence and allowed, so
 //! `/usr`, `/tmp`, package caches, the network and process execution are untouched. Portable
-//! cross-tenant isolation removes accidental parent enumeration. Seatbelt also denies sibling customer
-//! paths while restoring the workspace and trusted grants at greater depth. Other recursive denies
-//! remain available for explicit policies, but Landlock does not apply the Seatbelt-only rule because
-//! it cannot subtract that child from an operator-writable parent without preventing direct creation
-//! in the parent.
+//! cross-tenant isolation removes accidental parent enumeration while named sibling paths remain
+//! reachable. Recursive Seatbelt-only denies remain available for explicit specialized policies, but
+//! are not synthesized from a session's parent: doing so would make macOS stricter than the portable
+//! policy. Landlock does not apply those optional rules because it cannot subtract a child from an
+//! operator-writable parent without preventing direct creation in the parent.
 //!
 //! The fence is per-invocation and absent by default: only the model's `bash` tool supplies one.
 //! Host-driven shell use — credential helpers, the interactive `xcsh shell`, snapshot sourcing —
@@ -132,7 +132,7 @@ pub struct ContainmentFence {
 	/// Roots denied in both directions, winning over any allow they sit inside.
 	pub deny: Vec<PathBuf>,
 	/// Roots recursively denied by macOS Seatbelt only. Deeper workspace and trusted grants win;
-	/// Landlock deliberately ignores this platform-specific sibling-container boundary.
+	/// Landlock deliberately ignores these explicit, platform-specific boundaries.
 	pub deny_on_seatbelt: Vec<PathBuf>,
 	/// Exact directories whose entries may not be enumerated. Descendants remain reachable by name.
 	pub deny_enumerate: Vec<PathBuf>,

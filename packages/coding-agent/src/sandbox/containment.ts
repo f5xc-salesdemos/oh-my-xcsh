@@ -436,11 +436,10 @@ export function buildContainmentFence(options: ContainmentOptions): ContainmentF
 	const denyEnumerate = new Set<string>();
 
 	// The portable boundary removes discovery: without a directory listing, a session cannot casually scan
-	// the container and learn which sibling workspaces exist. Seatbelt can additionally deny that customer
-	// container recursively and restore the workspace and trusted grants with deeper rules. Landlock cannot
-	// express that subtraction without breaking direct creation in writable ancestors, so it keeps the exact
-	// enumeration policy (#2952). Home itself and operational parents such as `/usr` or the system temp
-	// directory are never treated as customer containers.
+	// the container and learn which sibling workspaces exist. Named siblings deliberately remain reachable;
+	// turning the parent into a recursive Seatbelt deny made macOS stricter than the portable policy and
+	// broke known-path collaboration between worktrees. Home itself and operational parents such as `/usr`
+	// or the system temp directory are never treated as customer containers.
 	const parentToProtect = path.dirname(workspace);
 
 	// Through `resolveGrants` like the allow-lists, so a session temp dir or artifacts dir that does not
@@ -484,7 +483,6 @@ export function buildContainmentFence(options: ContainmentOptions): ContainmentF
 	// containers are still protected, but the operator always retains a normal `ls ~` experience.
 	if (parentToProtect !== home && !tooBroadToDeny(parentToProtect, fsRoot) && !parentExplicitlyReadable) {
 		denyEnumerate.add(parentToProtect);
-		denyOnSeatbelt.add(parentToProtect);
 	}
 
 	if (home !== undefined) {

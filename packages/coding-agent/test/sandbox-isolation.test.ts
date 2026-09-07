@@ -187,35 +187,28 @@ describe("two-customer isolation, enforced in the shell", () => {
 		expect(text).not.toContain("custB");
 	});
 
-	it("Seatbelt denies named sibling reads and writes, including after traversal", async () => {
-		const backend = containmentStatus(true, process.platform, undefined, productFenceFor(custA)).backend;
+	it("preserves named sibling reads and writes, including after traversal", async () => {
 		for (const command of ["cat ../custB/secret.env", `cat ${path.join(custB, "secret.env")}`]) {
-			const { text } = await shell(custA, command);
-			if (backend === "seatbelt") expect(text).not.toContain("TOKEN=b");
-			else expect(text).toContain("TOKEN=b");
+			const { code, text } = await shell(custA, command);
+			expect(code).toBe(0);
+			expect(text).toContain("TOKEN=b");
 		}
-		// Brush evaluates `cd` in-process, outside the child Seatbelt profile. The security property is
-		// that the external read spawned afterward remains denied, not that the directory change fails.
+		// Brush evaluates `cd` in-process. The exact parent-enumeration deny must not turn that discovery
+		// boundary into a restriction on a named sibling path.
 		const moved = await shell(custA, "cd ../custB && cat secret.env");
-		if (backend === "seatbelt") {
-			expect(moved.text).not.toContain("TOKEN=b");
-		} else {
-			expect(moved.text).toContain("TOKEN=b");
-		}
+		expect(moved.code).toBe(0);
+		expect(moved.text).toContain("TOKEN=b");
 		await shell(custA, `printf x > ${path.join(custB, "planted.env")}`);
-		if (backend === "seatbelt") expect(fs.existsSync(path.join(custB, "planted.env"))).toBe(false);
-		else expect(fs.readFileSync(path.join(custB, "planted.env"), "utf8")).toBe("x");
+		expect(fs.readFileSync(path.join(custB, "planted.env"), "utf8")).toBe("x");
 		await shell(custA, `cp ${path.join(custB, "secret.env")} .`);
-		if (backend === "seatbelt") expect(fs.existsSync(path.join(custA, "secret.env"))).toBe(false);
-		else expect(fs.existsSync(path.join(custA, "secret.env"))).toBe(true);
+		expect(fs.existsSync(path.join(custA, "secret.env"))).toBe(true);
 	});
 
-	it("Seatbelt denies a sibling path assembled only after the shell starts", async () => {
-		const backend = containmentStatus(true, process.platform, undefined, productFenceFor(custA)).backend;
+	it("preserves a named sibling path assembled only after the shell starts", async () => {
 		const command = `p=${JSON.stringify(path.dirname(custB))}; n=custB; cat "$p/$n/secret.env"`;
-		const { text } = await shell(custA, command);
-		if (backend === "seatbelt") expect(text).not.toContain("TOKEN=b");
-		else expect(text).toContain("TOKEN=b");
+		const { code, text } = await shell(custA, command);
+		expect(code).toBe(0);
+		expect(text).toContain("TOKEN=b");
 	});
 
 	it("keeps an explicitly trusted sibling readable and writable through Seatbelt", async () => {
