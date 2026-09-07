@@ -10316,9 +10316,9 @@
 		}
 	},
 	"google-vertex": {
-		"gemini-3.7-flash": {
-			"id": "gemini-3.7-flash",
-			"name": "Gemini 3.7 Flash",
+		"gemini-3.8-flash": {
+			"id": "gemini-3.8-flash",
+			"name": "Gemini 3.8 Flash",
 			"api": "google-vertex",
 			"provider": "google-vertex",
 			"baseUrl": "https://{location}-aiplatform.googleapis.com",
@@ -10338,10 +10338,6 @@
 			"thinking": {
 				"mode": "google-level",
 				"supportedLevels": [
-					{
-						"effort": "minimal",
-						"description": "Very brief reasoning"
-					},
 					{
 						"effort": "low",
 						"description": "Light reasoning"

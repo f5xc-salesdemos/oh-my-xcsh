@@ -4,8 +4,8 @@ import type { TSchema } from "@sinclair/typebox";
 import { buildGoogleVertexParams, googleVertexRequestUrl } from "../src/providers/google-vertex";
 import type { AssistantMessage, Context, Model, ToolResultMessage } from "../src/types";
 
-describe("Vertex Gemini 3.7 request contract", () => {
-	const model = getBundledModel("google-vertex", "gemini-3.7-flash") as Model<"google-vertex">;
+describe("Vertex Gemini 3.8 request contract", () => {
+	const model = getBundledModel("google-vertex", "gemini-3.8-flash") as Model<"google-vertex">;
 
 	it("defaults to HIGH and strips deprecated or unsupported sampling controls", () => {
 		const params = buildGoogleVertexParams(
@@ -22,7 +22,7 @@ describe("Vertex Gemini 3.7 request contract", () => {
 			},
 		);
 
-		expect(params.model).toBe("gemini-3.7-flash");
+		expect(params.model).toBe("gemini-3.8-flash");
 		expect(params.config).toMatchObject({
 			maxOutputTokens: 1234,
 			thinkingConfig: { includeThoughts: true, thinkingLevel: "HIGH" },
@@ -31,7 +31,7 @@ describe("Vertex Gemini 3.7 request contract", () => {
 			expect(params.config).not.toHaveProperty(field);
 		}
 		expect(googleVertexRequestUrl(model.id, "test-project", "global")).toContain(
-			"/models/gemini-3.7-flash:streamGenerateContent",
+			"/models/gemini-3.8-flash:streamGenerateContent",
 		);
 	});
 
@@ -47,6 +47,21 @@ describe("Vertex Gemini 3.7 request contract", () => {
 		);
 		expect(String(params.config?.thinkingConfig?.thinkingLevel)).toBe(expected);
 		expect(model.thinking?.defaultLevel).toBe(Effort.High);
+	});
+
+	it("does not advertise or accept unsupported MINIMAL thinking", () => {
+		expect(model.thinking?.supportedLevels.map(level => level.effort)).toEqual([
+			Effort.Low,
+			Effort.Medium,
+			Effort.High,
+		]);
+		expect(() =>
+			buildGoogleVertexParams(
+				model,
+				{ messages: [{ role: "user", content: "Hello", timestamp: 1 }] },
+				{ thinking: { enabled: true, level: "MINIMAL" } },
+			),
+		).toThrow(/MINIMAL.*Gemini 3\.8 Flash/i);
 	});
 
 	it("restricts forced function calling to the requested tool", () => {
@@ -71,7 +86,7 @@ describe("Vertex Gemini 3.7 request contract", () => {
 	});
 
 	it("keeps matching function-call and function-response IDs", () => {
-		const toolCallId = "call-37_exact";
+		const toolCallId = "call-38_exact";
 		const assistant: AssistantMessage = {
 			role: "assistant",
 			content: [{ type: "toolCall", id: toolCallId, name: "lookup", arguments: { value: 7 } }],

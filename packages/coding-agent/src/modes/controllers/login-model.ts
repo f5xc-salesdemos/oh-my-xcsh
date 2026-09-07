@@ -43,10 +43,10 @@ export const GOOGLE_ANTIGRAVITY_LOGIN_MODEL_CHOICE: LoginModelChoice = {
 };
 
 export const GOOGLE_VERTEX_LOGIN_MODEL_CHOICE: LoginModelChoice = {
-	label: "Gemini 3.7 Flash High",
+	label: "Gemini 3.8 Flash High",
 	description: "Corporate Vertex AI model with high reasoning",
 	provider: "google-vertex",
-	modelId: "gemini-3.7-flash",
+	modelId: "gemini-3.8-flash",
 	thinkingLevel: ThinkingLevel.High,
 };
 

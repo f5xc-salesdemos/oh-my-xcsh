@@ -6,8 +6,8 @@ SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source "${SCRIPT_DIR}/uat-common.sh"
 
 PROMPTS_FILE=${1:-scripts/uat-prompts.json}
-MODEL=${GEMINI_MODEL:-gemini-3.1-pro-preview}
-LOCATION=${VERTEX_AI_LOCATION:-us-central1}
+MODEL=${GEMINI_MODEL:-gemini-3.8-flash}
+LOCATION=${VERTEX_AI_LOCATION:-global}
 [ -f "$PROMPTS_FILE" ] || uat_die "The synthesized prompt fixture is unavailable."
 jq -e 'type == "array" and length > 0' "$PROMPTS_FILE" >/dev/null ||
   uat_die "The synthesized prompt fixture must be a non-empty array."
@@ -28,7 +28,7 @@ fi
 token=$(gcloud auth print-access-token 2>/dev/null || true)
 [ -n "$token" ] || uat_die "No active Google Cloud access token is available."
 
-endpoint="https://${LOCATION}-aiplatform.googleapis.com/v1/projects/${project}/locations/${LOCATION}/publishers/google/models/${MODEL}:generateContent"
+endpoint=$(uat_vertex_endpoint "$MODEL" "$project" "$LOCATION")
 total=$(jq 'length' "$PROMPTS_FILE")
 passed=0
 

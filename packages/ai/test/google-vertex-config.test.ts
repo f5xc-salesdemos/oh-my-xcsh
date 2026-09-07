@@ -36,7 +36,7 @@ async function withoutProjectEnvironment(run: () => Promise<void>): Promise<void
 
 describe("Google Vertex runtime configuration", () => {
 	it("uses the standalone OAuth token through an explicit auth client", async () => {
-		const model = getBundledModel("google-vertex", "gemini-3.7-flash") as Model<"google-vertex">;
+		const model = getBundledModel("google-vertex", "gemini-3.8-flash") as Model<"google-vertex">;
 		const clientOptions = buildGoogleVertexClientOptions(
 			model,
 			"confirmed-project",
@@ -55,7 +55,7 @@ describe("Google Vertex runtime configuration", () => {
 	});
 
 	it("preserves standalone OAuth and confirmed project options through the simple stream mapper", () => {
-		const model = getBundledModel("google-vertex", "gemini-3.7-flash");
+		const model = getBundledModel("google-vertex", "gemini-3.8-flash");
 		const runtimeOptions = {
 			apiKey: "isolated-vertex-oauth-token",
 			project: "confirmed-project",
@@ -70,7 +70,7 @@ describe("Google Vertex runtime configuration", () => {
 	});
 
 	it("preserves a named tool choice for Vertex instead of widening it to unrestricted any", () => {
-		const model = getBundledModel("google-vertex", "gemini-3.7-flash");
+		const model = getBundledModel("google-vertex", "gemini-3.8-flash");
 		const runtimeOptions = {
 			toolChoice: { type: "tool", name: "todo_write" },
 		} as SimpleStreamOptions;
@@ -155,8 +155,8 @@ describe("Google Vertex runtime configuration", () => {
 		try {
 			Bun.env.GOOGLE_CLOUD_LOCATION = "us-central1";
 			expect(resolveGoogleVertexLocation({ location: "europe-west4" })).toBe("global");
-			expect(googleVertexRequestUrl("gemini-3.7-flash", "test-project", "global")).toBe(
-				"https://aiplatform.googleapis.com/v1/projects/test-project/locations/global/publishers/google/models/gemini-3.7-flash:streamGenerateContent",
+			expect(googleVertexRequestUrl("gemini-3.8-flash", "test-project", "global")).toBe(
+				"https://aiplatform.googleapis.com/v1/projects/test-project/locations/global/publishers/google/models/gemini-3.8-flash:streamGenerateContent",
 			);
 		} finally {
 			if (originalLocation === undefined) delete Bun.env.GOOGLE_CLOUD_LOCATION;

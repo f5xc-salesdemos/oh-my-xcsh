@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import {
 	detectVertexProject,
 	isHeadlessTerminal,
+	VERTEX_LOGIN_MODEL,
 	type VertexLoginRuntime,
 	validateVertexLogin,
 	vertexFailureGuidance,
@@ -20,6 +21,10 @@ function runtime(overrides: Partial<VertexLoginRuntime> = {}): VertexLoginRuntim
 }
 
 describe("corporate Vertex login flow", () => {
+	it("targets the GA Gemini 3.8 Flash model", () => {
+		expect(VERTEX_LOGIN_MODEL).toBe("gemini-3.8-flash");
+		expect(vertexFailureGuidance(new Error("not found"))).toContain("gemini-3.8-flash");
+	});
 	it("uses explicit environment, ADC, then gcloud project precedence", async () => {
 		await expect(
 			detectVertexProject(

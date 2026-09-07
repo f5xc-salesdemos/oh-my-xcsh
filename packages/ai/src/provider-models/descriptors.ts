@@ -276,7 +276,7 @@ export const DEFAULT_MODEL_PER_PROVIDER: Record<KnownProvider, string> = {
 	"amazon-bedrock": "us.anthropic.claude-opus-4-6-v1",
 	"google-antigravity": "gemini-3-pro-high",
 	"google-gemini-cli": "gemini-2.5-pro",
-	"google-vertex": "gemini-3-pro-preview",
+	"google-vertex": "gemini-3.8-flash",
 	minimax: "MiniMax-M2.5",
 	"minimax-code": "MiniMax-M2.5",
 	"minimax-code-cn": "MiniMax-M2.5",

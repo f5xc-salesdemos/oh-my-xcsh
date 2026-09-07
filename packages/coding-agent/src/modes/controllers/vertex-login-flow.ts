@@ -2,7 +2,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { $ } from "bun";
 
-export const VERTEX_LOGIN_MODEL = "gemini-3.7-flash";
+export const VERTEX_LOGIN_MODEL = "gemini-3.8-flash";
 export const VERTEX_LOGIN_LOCATION = "global";
 const VERTEX_BUILD_CREDENTIALS_UNAVAILABLE =
 	"Corporate Vertex OAuth credentials are unavailable in this build. Install an official xcsh binary or provide the licensed build credentials when running from source.";

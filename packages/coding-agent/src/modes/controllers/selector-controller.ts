@@ -1517,7 +1517,7 @@ export class SelectorController {
 			}
 
 			try {
-				this.ctx.showStatus("Validating Vertex AI OAuth credentials and Gemini 3.7 Flash access…");
+				this.ctx.showStatus("Validating Vertex AI OAuth credentials and Gemini 3.8 Flash access…");
 				await validateVertexLogin(runtime, project, accessToken);
 			} catch (error) {
 				const action = await this.#showLoginRecovery(
@@ -1535,12 +1535,12 @@ export class SelectorController {
 
 			await this.ctx.session.modelRegistry.refreshProvider("google-vertex", "online");
 			const applied = await applyModelAfterLogin(this.ctx.session, GOOGLE_VERTEX_LOGIN_MODEL_CHOICE);
-			if (!applied) throw new Error("Gemini 3.7 Flash is unavailable in the local Vertex model registry");
+			if (!applied) throw new Error("Gemini 3.8 Flash is unavailable in the local Vertex model registry");
 			this.ctx.session.settings.set("providers.vertexProject", project);
 			this.ctx.session.settings.set("providers.vertexLocation", "global");
 			this.ctx.statusLine.invalidate();
 			this.ctx.updateEditorBorderColor();
-			this.ctx.showStatus("Vertex AI configured: google-vertex/gemini-3.7-flash:high (global)");
+			this.ctx.showStatus("Vertex AI configured: google-vertex/gemini-3.8-flash:high (global)");
 		} catch (error) {
 			if (error instanceof LoginPromptCancelled) {
 				this.ctx.showStatus("Vertex AI login cancelled. Existing configuration unchanged.");

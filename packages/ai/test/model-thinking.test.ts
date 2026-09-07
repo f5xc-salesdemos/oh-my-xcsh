@@ -15,6 +15,7 @@ import {
 import type { Api, Model, Provider, ThinkingConfig } from "@f5-sales-demo/pi-ai/types";
 import { getBundledModel } from "../src/models";
 import MODELS from "../src/models.json" with { type: "json" };
+import { DEFAULT_MODEL_PER_PROVIDER } from "../src/provider-models/descriptors";
 
 function createModel<TApi extends Api>(overrides: {
 	id: string;
@@ -90,25 +91,22 @@ describe("model thinking metadata", () => {
 		expect(() => requireSupportedEffort(model, Effort.XHigh)).toThrow(/Supported efforts: medium, high/);
 	});
 
-	it("replaces Vertex Gemini 3.6 Flash with GA Gemini 3.7 Flash", () => {
-		const model = getBundledModel("google-vertex", "gemini-3.7-flash");
+	it("replaces Vertex Gemini 3.7 Flash with GA Gemini 3.8 Flash", () => {
+		const model = getBundledModel("google-vertex", "gemini-3.8-flash");
 
 		expect(model).toMatchObject({
-			id: "gemini-3.7-flash",
+			id: "gemini-3.8-flash",
 			api: "google-vertex",
 			provider: "google-vertex",
 			reasoning: true,
 			cost: { input: 0.75, output: 3.75, cacheRead: 0.075, cacheWrite: 0 },
 			contextWindow: 1_048_576,
 			maxTokens: 65_536,
-			thinking: createThinkingConfig(
-				[Effort.Minimal, Effort.Low, Effort.Medium, Effort.High],
-				"google-level",
-				Effort.High,
-			),
+			thinking: createThinkingConfig([Effort.Low, Effort.Medium, Effort.High], "google-level", Effort.High),
 		});
-		expect(getSupportedEfforts(model)).toEqual([Effort.Minimal, Effort.Low, Effort.Medium, Effort.High]);
-		expect(getBundledModel("google-vertex", "gemini-3.6-flash")).toBeUndefined();
+		expect(getSupportedEfforts(model)).toEqual([Effort.Low, Effort.Medium, Effort.High]);
+		expect(DEFAULT_MODEL_PER_PROVIDER["google-vertex"]).toBe("gemini-3.8-flash");
+		expect(getBundledModel("google-vertex", "gemini-3.7-flash")).toBeUndefined();
 	});
 
 	it("stores xhigh support directly in metadata for GPT-5.2", () => {

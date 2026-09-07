@@ -48,7 +48,7 @@ const OPENAI_CODEX: ProviderTarget = {
 };
 const VERTEX_FLASH: ProviderTarget = {
 	label: "Google Vertex Flash",
-	model: "google-vertex/gemini-3.7-flash",
+	model: "google-vertex/gemini-3.8-flash",
 	thinking: "high",
 };
 const VERTEX_PRO: ProviderTarget = {

@@ -6,6 +6,9 @@
 
 ### Changed
 
+- Replaced the bundled Vertex Gemini 3.7 Flash model and provider default with GA Gemini 3.8 Flash,
+  retaining HIGH thinking by default and the strict Vertex tool-call contract
+  ([#3751](https://github.com/f5-sales-demo/xcsh/issues/3751)).
 - Replaced Vertex Gemini 3.6 Flash with GA Gemini 3.7 Flash and made full Vertex Gemini Flash and Pro models default to HIGH thinking while preserving supported explicit effort overrides ([#3460](https://github.com/f5-sales-demo/xcsh/issues/3460)).
 
 ### Fixed

@@ -45,7 +45,8 @@ describe("ModelRegistry", () => {
 			status: "ok",
 			stale: false,
 		});
-		expect(registry.getProviderDiscoveryState("google-vertex")?.models).toContain("gemini-3.7-flash");
+		expect(registry.getProviderDiscoveryState("google-vertex")?.models).toContain("gemini-3.8-flash");
+		expect(registry.getProviderDiscoveryState("google-vertex")?.models).not.toContain("gemini-3.7-flash");
 	});
 
 	beforeEach(async () => {

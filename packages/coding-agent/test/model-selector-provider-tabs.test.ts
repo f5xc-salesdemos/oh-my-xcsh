@@ -34,7 +34,7 @@ describe("authenticated provider model groups", () => {
 			model("openai-codex", "gpt-5.6-terra"),
 			model("openai-codex", "gpt-5.6-luna"),
 			model("google-vertex", "gemini-2.5-flash"),
-			model("google-vertex", "gemini-3.7-flash"),
+			model("google-vertex", "gemini-3.8-flash"),
 			model("google-antigravity", "gemini-3.6-flash-tiered"),
 			model("google-antigravity", "gemini-3.7-flash-tiered"),
 			model("google-antigravity", "gemini-3-pro-high"),
@@ -54,7 +54,7 @@ describe("authenticated provider model groups", () => {
 			"openai-codex/gpt-5.6-sol",
 			"openai-codex/gpt-5.6-terra",
 			"openai-codex/gpt-5.6-luna",
-			"google-vertex/gemini-3.7-flash",
+			"google-vertex/gemini-3.8-flash",
 			"google-antigravity/gemini-3.7-flash-tiered",
 			"google-antigravity/gemini-3.1-pro-high",
 			"google-vertex/gemini-3.1-pro-preview",
@@ -81,7 +81,7 @@ describe("authenticated provider model groups", () => {
 	it("admits successful and cached authenticated catalogs, rejects failures, and separates local runtimes", () => {
 		const models = [
 			model("openai-codex", "gpt-5.6-sol"),
-			model("google-vertex", "gemini-3.7-flash"),
+			model("google-vertex", "gemini-3.8-flash"),
 			model("google-antigravity", "gemini-3.7-flash-tiered"),
 			model("anthropic", "claude-sonnet-4-6"),
 			model("ollama", "qwen3:8b"),
@@ -116,7 +116,7 @@ describe("authenticated provider model groups", () => {
 	it("uses configured-provider order before display-name order when the current provider is absent", () => {
 		const models = [
 			model("openai-codex", "gpt-5.6-sol"),
-			model("google-vertex", "gemini-3.7-flash"),
+			model("google-vertex", "gemini-3.8-flash"),
 			model("anthropic", "claude-sonnet-4-6"),
 		];
 		const groups = buildProviderModelGroups(models, provider => state(provider), ["google-vertex"]);
@@ -156,10 +156,10 @@ function selectorHarness(
 		family: "GPT-5.6",
 		tier: "Luna",
 	});
-	const vertex = model("google-vertex", "gemini-3.7-flash", {
-		name: "Gemini 3.7 Flash",
+	const vertex = model("google-vertex", "gemini-3.8-flash", {
+		name: "Gemini 3.8 Flash",
 		reasoning: true,
-		thinking: createThinkingConfig([Effort.Minimal, Effort.Low, Effort.Medium, Effort.High]),
+		thinking: createThinkingConfig([Effort.Low, Effort.Medium, Effort.High]),
 	});
 	const ollama = model("ollama", "qwen3:8b", { name: "Qwen 3 8B", publisher: "Qwen", family: "Qwen 3" });
 	const models = [
@@ -286,7 +286,7 @@ describe("provider-tab model selector", () => {
 		expect(rendered).toContain("GPT-5.6 Luna [openai-codex/gpt-5.6-luna]");
 		expect(rendered).not.toContain("QUICK");
 		expect(rendered).not.toContain("ALL MODELS");
-		expect(rendered).not.toContain("Gemini 3.7 Flash");
+		expect(rendered).not.toContain("Gemini 3.8 Flash");
 	});
 
 	it("searches globally, groups providers, and clearing restores the active provider", async () => {
@@ -294,21 +294,21 @@ describe("provider-tab model selector", () => {
 		await Bun.sleep(0);
 		for (const character of "gemini") selector.handleInput(character);
 		let rendered = Bun.stripANSI(selector.render(180).join("\n"));
-		expect(rendered).toContain("Google Vertex › Google › Gemini 3.7");
-		expect(rendered).toContain("google-vertex/gemini-3.7-flash");
+		expect(rendered).toContain("Google Vertex › Google › Gemini 3.8");
+		expect(rendered).toContain("google-vertex/gemini-3.8-flash");
 		for (let index = 0; index < 6; index += 1) selector.handleInput("\x7f");
 		rendered = Bun.stripANSI(selector.render(180).join("\n"));
 		expect(rendered).toContain("GPT-5.6 Sol");
-		expect(rendered).not.toContain("Gemini 3.7 Flash");
+		expect(rendered).not.toContain("Gemini 3.8 Flash");
 	});
 
 	it("allows exact provider selectors containing the secondary-role shortcut", async () => {
 		const { selector } = selectorHarness(undefined, { antigravity: true });
 		await Bun.sleep(0);
-		for (const character of "google-vertex/gemini-3.7-flash") selector.handleInput(character);
+		for (const character of "google-vertex/gemini-3.8-flash") selector.handleInput(character);
 		const rendered = Bun.stripANSI(selector.render(180).join("\n"));
-		expect(selector.getSearchInput().getValue()).toBe("google-vertex/gemini-3.7-flash");
-		expect(rendered).toContain("Google Vertex › Google › Gemini 3.7");
+		expect(selector.getSearchInput().getValue()).toBe("google-vertex/gemini-3.8-flash");
+		expect(rendered).toContain("Google Vertex › Google › Gemini 3.8");
 		expect(rendered).not.toContain("Action for:");
 		expect(rendered).not.toContain("google-antigravity/");
 	});
@@ -323,7 +323,7 @@ describe("provider-tab model selector", () => {
 	});
 
 	it("describes retained cached inventory and refreshes it with Ctrl+R", async () => {
-		const current = model("google-vertex", "gemini-3.7-flash");
+		const current = model("google-vertex", "gemini-3.8-flash");
 		let finishRefresh: (() => void) | undefined;
 		const pendingRefresh = new Promise<void>(resolve => {
 			finishRefresh = resolve;
@@ -355,7 +355,7 @@ describe("provider-tab model selector", () => {
 		selector.handleInput("\t");
 		await Bun.sleep(0);
 		const vertex = Bun.stripANSI(selector.render(52).join("\n"));
-		expect(vertex).toContain("Gemini 3.7 Flash");
+		expect(vertex).toContain("Gemini 3.8 Flash");
 		expect(vertex).not.toContain("GPT-5.6 Sol");
 		expect(refreshProvider).toHaveBeenCalledWith("google-vertex", "online");
 
@@ -374,7 +374,7 @@ describe("provider-tab model selector", () => {
 		await Bun.sleep(0);
 		selector.handleInput("\r");
 		const picker = Bun.stripANSI(selector.render(100).join("\n"));
-		expect(picker).toContain("min —");
+		expect(picker).not.toContain("min —");
 		expect(picker).toContain("low —");
 		expect(picker).toContain("medium —");
 		expect(picker).toContain("high —");
