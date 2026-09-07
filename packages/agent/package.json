@@ -1,7 +1,7 @@
 {
 	"type": "module",
 	"name": "@f5-sales-demo/pi-agent-core",
-	"version": "21.15.1",
+	"version": "21.16.0",
 	"description": "General-purpose agent with transport abstraction, state management, and attachment support",
 	"homepage": "https://github.com/f5-sales-demo/xcsh",
 	"author": "Can Boluk",
