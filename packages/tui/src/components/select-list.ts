@@ -1,4 +1,5 @@
 import { getKeybindings } from "../keybindings";
+import { type MouseRoutable, routeSelectListMouse, type SgrMouseEvent } from "../mouse";
 import type { SymbolTheme } from "../symbols";
 import type { Component } from "../tui";
 import { Ellipsis, padding, replaceTabs, truncateToWidth, visibleWidth } from "../utils";
@@ -31,6 +32,7 @@ export interface SelectListTheme {
 	scrollInfo: (text: string) => string;
 	noMatch: (text: string) => string;
 	symbols: SymbolTheme;
+	hovered?: (text: string) => string;
 }
 
 export interface SelectListTruncatePrimaryContext {
@@ -47,9 +49,11 @@ export interface SelectListLayoutOptions {
 	truncatePrimary?: (context: SelectListTruncatePrimaryContext) => string;
 }
 
-export class SelectList implements Component {
+export class SelectList implements Component, MouseRoutable {
 	#filteredItems: ReadonlyArray<SelectItem>;
 	#selectedIndex: number = 0;
+	#hoveredIndex: number | null = null;
+	#hitRows: (number | undefined)[] = [];
 
 	onSelect?: (item: SelectItem) => void;
 	onCancel?: () => void;
@@ -74,12 +78,43 @@ export class SelectList implements Component {
 		this.#selectedIndex = Math.max(0, Math.min(index, this.#filteredItems.length - 1));
 	}
 
+	hitTest(line: number): number | undefined {
+		return this.#hitRows[line];
+	}
+
+	setHoverIndex(index: number | null): void {
+		this.#hoveredIndex = index;
+	}
+
+	handleWheel(delta: -1 | 1): void {
+		if (this.#filteredItems.length === 0) return;
+		const next = clamp(this.#selectedIndex + delta, 0, this.#filteredItems.length - 1);
+		if (next === this.#selectedIndex) return;
+		this.#selectedIndex = next;
+		this.#notifySelectionChange();
+	}
+
+	clickItem(index: number): void {
+		const item = this.#filteredItems[index];
+		if (!item) return;
+		if (index !== this.#selectedIndex) {
+			this.#selectedIndex = index;
+			this.#notifySelectionChange();
+		}
+		this.onSelect?.(item);
+	}
+
+	routeMouse(event: SgrMouseEvent, line: number, _col: number): void {
+		routeSelectListMouse(this, event, line);
+	}
+
 	invalidate(): void {
 		// No cached state to invalidate currently
 	}
 
 	render(width: number): string[] {
 		const lines: string[] = [];
+		this.#hitRows = [];
 
 		// If no items match filter, show message
 		if (this.#filteredItems.length === 0) {
@@ -103,7 +138,11 @@ export class SelectList implements Component {
 
 			const isSelected = i === this.#selectedIndex;
 			const descriptionText = item.description ? sanitizeSingleLine(item.description) : undefined;
-			lines.push(this.#renderItem(item, isSelected, width, descriptionText, primaryColumnWidth));
+			const rendered = this.#renderItem(item, isSelected, width, descriptionText, primaryColumnWidth);
+			this.#hitRows[lines.length] = i;
+			lines.push(
+				!isSelected && i === this.#hoveredIndex && this.theme.hovered ? this.theme.hovered(rendered) : rendered,
+			);
 		}
 
 		// Add scroll indicators if needed

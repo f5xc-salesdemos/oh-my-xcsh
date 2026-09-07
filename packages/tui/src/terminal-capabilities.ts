@@ -1,5 +1,6 @@
 import { encodeSixel } from "@f5-sales-demo/pi-natives";
 import { $env } from "@f5-sales-demo/pi-utils";
+import { isInsideHerdr } from "./terminal-multiplexer";
 
 export enum ImageProtocol {
 	Kitty = "\x1b_G",
@@ -14,6 +15,59 @@ export enum NotifyProtocol {
 }
 
 export type TerminalId = "kitty" | "ghostty" | "wezterm" | "iterm2" | "vscode" | "alacritty" | "base" | "trueColor";
+
+export interface TerminalNotification {
+	title?: string;
+	body?: string;
+	type?: string | string[];
+}
+
+const DEFAULT_NOTIFICATION_TITLE = "xcsh";
+const HERDR_PANE_ID_PATTERN = /^[0-9A-Za-z:_-]{1,64}$/u;
+const HERDR_USAGE_TOKENS = new Set(["help", "--help", "-h"]);
+
+function notificationTitleAndBody(message: string | TerminalNotification): { title: string; body: string } {
+	if (typeof message === "string") return { title: DEFAULT_NOTIFICATION_TITLE, body: message };
+	return { title: message.title?.trim() || DEFAULT_NOTIFICATION_TITLE, body: message.body ?? "" };
+}
+
+function notificationToLine(message: TerminalNotification): string {
+	if (message.title && message.body) return `${message.title}: ${message.body}`;
+	return message.title ?? message.body ?? "";
+}
+
+export function buildHerdrNotificationCommand(
+	message: string | TerminalNotification,
+	env: NodeJS.ProcessEnv = Bun.env,
+): string[] | null {
+	if (!isInsideHerdr(env)) return null;
+	const paneId = env.HERDR_PANE_ID?.trim();
+	if (!paneId || !HERDR_PANE_ID_PATTERN.test(paneId)) return null;
+	const parsed = notificationTitleAndBody(message);
+	const title = HERDR_USAGE_TOKENS.has(parsed.title) ? DEFAULT_NOTIFICATION_TITLE : parsed.title;
+	const types = typeof message === "string" ? [] : [message.type ?? []].flat();
+	const sound =
+		types.includes("ask") || types.includes("error") ? "request" : types.includes("completion") ? "done" : "none";
+	return ["herdr", "notification", "show", title, "--body", parsed.body, "--sound", sound];
+}
+
+function sendHerdrNotification(message: string | TerminalNotification, env: NodeJS.ProcessEnv = Bun.env): boolean {
+	const cmd = buildHerdrNotificationCommand(message, env);
+	if (!cmd) return false;
+	if (!Bun.which(cmd[0]!, { PATH: env.PATH })) return false;
+	try {
+		const child = Bun.spawn({
+			cmd,
+			stdin: "ignore",
+			stdout: "ignore",
+			stderr: "ignore",
+		});
+		child.unref();
+		return true;
+	} catch {
+		return false;
+	}
+}
 
 const SIXEL_DCS_START_REGEX = /\x1bP(?:[0-9;]*)q/u;
 /** Terminal capability details used for rendering and protocol selection. */
@@ -40,15 +94,17 @@ export class TerminalInfo {
 		return false;
 	}
 
-	formatNotification(message: string): string {
+	formatNotification(message: string | TerminalNotification): string {
 		if (this.notifyProtocol === NotifyProtocol.Bell) {
 			return NotifyProtocol.Bell;
 		}
-		return `${this.notifyProtocol}${message}\x1b\\`;
+		const line = typeof message === "string" ? message : notificationToLine(message);
+		return `${this.notifyProtocol}${line}\x1b\\`;
 	}
 
-	sendNotification(message: string): void {
+	sendNotification(message: string | TerminalNotification): void {
 		if (isNotificationSuppressed()) return;
+		if (sendHerdrNotification(message)) return;
 		process.stdout.write(this.formatNotification(message));
 	}
 }

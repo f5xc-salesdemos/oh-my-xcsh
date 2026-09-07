@@ -1,4 +1,4 @@
-import { isEnoent, logger, ptree, untilAborted } from "@f5-sales-demo/pi-utils";
+import { isEnoent, logger, postmortem, ptree, untilAborted } from "@f5-sales-demo/pi-utils";
 import { ToolAbortError, throwIfAborted } from "../tools/tool-errors";
 import { applyWorkspaceEdit } from "./edits";
 import { getLspmuxCommand, isLspmuxSupported } from "./lspmux";
@@ -930,12 +930,5 @@ export function getActiveClients(): LspServerStatus[] {
 // Register cleanup on module unload
 if (typeof process !== "undefined") {
 	process.on("beforeExit", shutdownAll);
-	process.on("SIGINT", () => {
-		shutdownAll();
-		process.exit(0);
-	});
-	process.on("SIGTERM", () => {
-		shutdownAll();
-		process.exit(0);
-	});
+	postmortem.register("lsp-shutdown", async () => void (await shutdownAll()));
 }

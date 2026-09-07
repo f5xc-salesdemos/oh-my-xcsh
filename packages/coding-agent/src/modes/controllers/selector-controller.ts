@@ -249,14 +249,26 @@ export class SelectorController {
 	 * Replaces /status with a unified view of all providers and extensions.
 	 */
 	async showExtensionsDashboard(): Promise<void> {
-		const dashboard = await ExtensionDashboard.create(getProjectDir(), this.ctx.settings, this.ctx.ui.terminal.rows);
-		this.showSelector(done => {
-			dashboard.onClose = () => {
-				done();
-				this.ctx.ui.requestRender();
-			};
-			return { component: dashboard, focus: dashboard };
+		const dashboard = await ExtensionDashboard.create(
+			getProjectDir(),
+			this.ctx.settings,
+			() => this.ctx.ui.terminal.rows,
+		);
+		const overlay = this.ctx.ui.showOverlay(dashboard, {
+			fullscreen: true,
+			anchor: "top-left",
+			width: "100%",
+			maxHeight: "100%",
+			margin: 0,
 		});
+		dashboard.onClose = () => {
+			overlay.hide();
+			this.ctx.ui.setFocus(this.ctx.editor);
+			this.ctx.ui.requestRender();
+		};
+		dashboard.onRequestRender = () => this.ctx.ui.requestRender();
+		this.ctx.ui.setFocus(dashboard);
+		this.ctx.ui.requestRender();
 	}
 
 	/**
@@ -927,38 +939,49 @@ export class SelectorController {
 			this.ctx.sessionManager.getCwd(),
 			this.ctx.sessionManager.getSessionDir(),
 		);
-		this.showSelector(done => {
-			const selector = new SessionSelectorComponent(
-				sessions,
-				async sessionPath => {
-					done();
-					await this.handleResumeSession(sessionPath);
-				},
-				() => {
-					done();
-					this.ctx.ui.requestRender();
-				},
-				() => {
-					void this.ctx.shutdown();
-				},
-				async (session: SessionInfo) => {
-					if (!(await this.#detachActiveSessionBeforeDeletion(session.path))) {
-						return false;
-					}
-					const storage = new FileSessionStorage();
-					try {
-						await storage.deleteSessionWithArtifacts(session.path);
-						return true;
-					} catch (err) {
-						throw new Error(`Failed to delete session: ${err instanceof Error ? err.message : String(err)}`, {
-							cause: err,
-						});
-					}
-				},
-			);
-			selector.setOnRequestRender(() => this.ctx.ui.requestRender());
-			return { component: selector, focus: selector };
+		let hideOverlay = () => {};
+		const done = () => {
+			hideOverlay();
+			this.ctx.ui.setFocus(this.ctx.editor);
+			this.ctx.ui.requestRender();
+		};
+		const selector = new SessionSelectorComponent(
+			sessions,
+			async sessionPath => {
+				done();
+				await this.handleResumeSession(sessionPath);
+			},
+			done,
+			() => {
+				done();
+				void this.ctx.shutdown();
+			},
+			async (session: SessionInfo) => {
+				if (!(await this.#detachActiveSessionBeforeDeletion(session.path))) {
+					return false;
+				}
+				const storage = new FileSessionStorage();
+				try {
+					await storage.deleteSessionWithArtifacts(session.path);
+					return true;
+				} catch (err) {
+					throw new Error(`Failed to delete session: ${err instanceof Error ? err.message : String(err)}`, {
+						cause: err,
+					});
+				}
+			},
+			{ getTerminalRows: () => this.ctx.ui.terminal.rows },
+		);
+		selector.setOnRequestRender(() => this.ctx.ui.requestRender());
+		const overlay = this.ctx.ui.showOverlay(selector, {
+			fullscreen: true,
+			anchor: "top-left",
+			width: "100%",
+			maxHeight: "100%",
+			margin: 0,
 		});
+		hideOverlay = () => overlay.hide();
+		this.ctx.ui.setFocus(selector);
 	}
 
 	#clearTransientSessionUi(): void {

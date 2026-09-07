@@ -558,7 +558,7 @@ export class EventController {
 				this.#lastAssistantComponent = undefined;
 				this.ctx.ui.requestRender();
 				this.#scheduleIdleCompaction();
-				this.sendCompletionNotification();
+				this.sendCompletionNotification(event);
 				break;
 
 			case "auto_compaction_start": {
@@ -740,13 +740,20 @@ export class EventController {
 		return lastAssistant?.usage ? calculatePromptTokens(lastAssistant.usage) : 0;
 	}
 
-	sendCompletionNotification(): void {
+	sendCompletionNotification(event?: Extract<AgentSessionEvent, { type: "agent_end" }>): void {
 		if (this.ctx.isBackgrounded === false) return;
 		const notify = settings.get("completion.notify");
 		if (notify === "off") return;
 		const title = this.ctx.sessionManager.getSessionName();
-		const message = title ? `${title}: Complete` : "Complete";
-		TERMINAL.sendNotification(message);
+		const lastAssistant = event?.messages.findLast(
+			(message): message is AssistantMessage => message.role === "assistant",
+		);
+		const failed = lastAssistant?.stopReason === "error";
+		TERMINAL.sendNotification({
+			title: title || "xcsh",
+			body: failed ? "Stopped with error" : "Complete",
+			type: failed ? "error" : "completion",
+		});
 	}
 
 	async handleBackgroundEvent(event: AgentSessionEvent): Promise<void> {
@@ -756,7 +763,7 @@ export class EventController {
 		if (this.ctx.session.queuedMessageCount > 0 || this.ctx.session.isStreaming) {
 			return;
 		}
-		this.sendCompletionNotification();
+		this.sendCompletionNotification(event);
 		await this.ctx.shutdown();
 	}
 }

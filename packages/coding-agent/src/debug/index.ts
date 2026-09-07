@@ -6,7 +6,15 @@
 import * as fs from "node:fs/promises";
 import * as url from "node:url";
 import { getWorkProfile } from "@f5-sales-demo/pi-natives";
-import { Container, Loader, type SelectItem, SelectList, Spacer, Text } from "@f5-sales-demo/pi-tui";
+import {
+	Container,
+	Loader,
+	type OverlayHandle,
+	type SelectItem,
+	SelectList,
+	Spacer,
+	Text,
+} from "@f5-sales-demo/pi-tui";
 import { getSessionsDir } from "@f5-sales-demo/pi-utils";
 import type { ContextProfile } from "../context/profile";
 import { DynamicBorder } from "../modes/components/dynamic-border";
@@ -302,18 +310,27 @@ export class DebugSelectorComponent extends Container {
 				return;
 			}
 
+			let overlay: OverlayHandle | undefined;
 			const viewer = new DebugLogViewerComponent({
 				logs,
-				terminalRows: this.ctx.ui.terminal.rows,
-				onExit: () => this.ctx.showDebugSelector(),
+				terminalRows: () => this.ctx.ui.terminal.rows,
+				onExit: () => {
+					overlay?.hide();
+					this.ctx.showDebugSelector();
+				},
 				onStatus: message => this.ctx.showStatus(message, { dim: true }),
 				onError: message => this.ctx.showError(message),
 				onUpdate: () => this.ctx.ui.requestRender(),
 				logSource,
 			});
 
-			this.ctx.editorContainer.clear();
-			this.ctx.editorContainer.addChild(viewer);
+			overlay = this.ctx.ui.showOverlay(viewer, {
+				fullscreen: true,
+				anchor: "top-left",
+				width: "100%",
+				maxHeight: "100%",
+				margin: 0,
+			});
 			this.ctx.ui.setFocus(viewer);
 		} catch (err) {
 			this.ctx.showError(`Failed to read logs: ${err instanceof Error ? err.message : String(err)}`);

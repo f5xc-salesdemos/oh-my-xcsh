@@ -490,6 +490,7 @@ export class AgentSession {
 	// Callers (e.g., SDK-level code that registers external listeners) register cleanups here so
 	// dispose() unregisters them. Prevents leaked listeners from mutating dead session state.
 	#disposeHooks: Array<() => void | Promise<void>> = [];
+	#disposeCall?: Promise<void>;
 
 	/** Tracks pending steering messages for UI display. Removed when delivered. */
 	#steeringMessages: string[] = [];
@@ -2239,8 +2240,17 @@ export class AgentSession {
 	 * Remove all listeners, flush pending writes, and disconnect from agent.
 	 * Call this when completely done with the session.
 	 */
-	async dispose(): Promise<void> {
+	beginDispose(): void {
 		this.#pythonExecutionDisposing = true;
+	}
+
+	dispose(): Promise<void> {
+		this.beginDispose();
+		if (!this.#disposeCall) this.#disposeCall = this.#doDispose();
+		return this.#disposeCall;
+	}
+
+	async #doDispose(): Promise<void> {
 		try {
 			if (this.#extensionRunner?.hasHandlers("session_shutdown")) {
 				await this.#extensionRunner.emit({ type: "session_shutdown" });

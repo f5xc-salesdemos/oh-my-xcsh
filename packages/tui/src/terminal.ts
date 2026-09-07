@@ -12,6 +12,19 @@ import { StdinBuffer } from "./stdin-buffer";
 let activeTerminal: ProcessTerminal | null = null;
 // Track if a terminal was ever started (for emergency restore logic)
 let terminalEverStarted = false;
+let alternateScreenActive = false;
+const EMERGENCY_MOUSE_RESTORE = "\x1b[?1006l\x1b[?1003l\x1b[?1000l";
+
+/** Track alternate-screen ownership so crash cleanup does not disturb the normal screen. */
+export function setAlternateScreenActive(active: boolean): void {
+	alternateScreenActive = active;
+}
+
+function emergencyScreenRestoreSequence(): string {
+	const sequence = `${EMERGENCY_MOUSE_RESTORE}${alternateScreenActive ? "\x1b[?1049l" : ""}`;
+	alternateScreenActive = false;
+	return sequence;
+}
 
 const STD_INPUT_HANDLE = -10;
 const ENABLE_VIRTUAL_TERMINAL_INPUT = 0x0200;
@@ -24,12 +37,14 @@ export function emergencyTerminalRestore(): void {
 		const terminal = activeTerminal;
 		if (terminal) {
 			terminal.stop();
+			process.stdout.write(emergencyScreenRestoreSequence());
 			terminal.showCursor();
 		} else if (terminalEverStarted) {
 			// Blind restore only if we know a terminal was started but lost track of it
 			// This avoids writing escape sequences for non-TUI commands (grep, commit, etc.)
 			process.stdout.write(
-				"\x1b[?2004l" + // Disable bracketed paste
+				emergencyScreenRestoreSequence() +
+					"\x1b[?2004l" + // Disable bracketed paste
 					"\x1b[?2031l" + // Disable Mode 2031 appearance notifications
 					"\x1b[<u" + // Pop kitty keyboard protocol
 					"\x1b[>4;0m" + // Disable modifyOtherKeys fallback

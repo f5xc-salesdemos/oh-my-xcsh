@@ -6,6 +6,17 @@
 
 ### Fixed
 
+- Added shared SGR mouse routing and fullscreen alternate-screen ownership for interactive overlays,
+  including horizontal-wheel filtering, Herdr-safe redraw behavior, and idempotent mouse/screen
+  restoration. Semantically ported from [can1357/oh-my-pi#3402](https://github.com/can1357/oh-my-pi/pull/3402),
+  [#7810](https://github.com/can1357/oh-my-pi/pull/7810),
+  [#8433](https://github.com/can1357/oh-my-pi/pull/8433), and
+  [#11045](https://github.com/can1357/oh-my-pi/pull/11045)
+  ([#3748](https://github.com/f5-sales-demo/xcsh/issues/3748)).
+- Delivered structured completion, request, and error notifications to validated Herdr panes while
+  preserving existing terminal fallbacks and explicit Kitty graphics negotiation. Semantically
+  ported from [can1357/oh-my-pi#11054](https://github.com/can1357/oh-my-pi/pull/11054)
+  ([#3748](https://github.com/f5-sales-demo/xcsh/issues/3748)).
 - Bounded oversized ANSI-heavy render rows before width measurement while preserving visible text,
   complete OSC 66 payloads, and reset semantics. Semantically ported from
   [can1357/oh-my-pi#2047](https://github.com/can1357/oh-my-pi/pull/2047)
