@@ -166,20 +166,17 @@ pub fn compose_std_command<S: AsRef<OsStr>>(
 		.as_ref()
 		.map(|fence| fence.to_seatbelt_profile());
 	#[cfg(target_os = "macos")]
-	let mut cmd = match sandboxed.as_deref() {
-		Some(profile) => {
-			let mut wrapper = std::process::Command::new("/usr/bin/sandbox-exec");
-			// `--` terminates sandbox-exec's own option parsing, so a command whose name begins with
-			// `-` cannot be read as a flag to the wrapper. Verified that sandbox-exec honours it —
-			// it is undocumented, and adding it blind would have broken every fenced command.
-			wrapper.arg("-p").arg(profile).arg("--").arg(command_name);
-			wrapper
-		},
-		None => {
-			let mut direct = std::process::Command::new(command_name);
-			direct.arg0(argv0);
-			direct
-		},
+	let mut cmd = if let Some(profile) = sandboxed.as_deref() {
+		let mut wrapper = std::process::Command::new("/usr/bin/sandbox-exec");
+		// `--` terminates sandbox-exec's own option parsing, so a command whose name begins with
+		// `-` cannot be read as a flag to the wrapper. Verified that sandbox-exec honours it —
+		// it is undocumented, and adding it blind would have broken every fenced command.
+		wrapper.arg("-p").arg(profile).arg("--").arg(command_name);
+		wrapper
+	} else {
+		let mut direct = std::process::Command::new(command_name);
+		direct.arg0(argv0);
+		direct
 	};
 	#[cfg(not(target_os = "macos"))]
 	let mut cmd = {
