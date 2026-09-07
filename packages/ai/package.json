@@ -1,7 +1,7 @@
 {
 	"type": "module",
 	"name": "@f5-sales-demo/pi-ai",
-	"version": "21.16.0",
+	"version": "21.17.0",
 	"description": "Unified LLM API with automatic model discovery and provider configuration",
 	"homepage": "https://github.com/f5-sales-demo/xcsh",
 	"author": "Can Boluk",
