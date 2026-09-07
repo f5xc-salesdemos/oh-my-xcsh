@@ -127,8 +127,8 @@ test("streaming deltas + chat_done accumulates text and sets status done", async
 	const { id } = sentReq;
 
 	await act(async () => {
-		mock.emit({ type: "chat_delta", id, seq: 0, delta: "Hel" });
-		mock.emit({ type: "chat_delta", id, seq: 1, delta: "lo" });
+		mock.emit({ type: "chat_delta", id, itemId: "a1", seq: 0, delta: "Hel" });
+		mock.emit({ type: "chat_delta", id, itemId: "a1", seq: 1, delta: "lo" });
 		mock.emit({ type: "chat_done", id });
 	});
 
@@ -237,7 +237,7 @@ test("chat_tool_notice folds live tool activity onto the active assistant turn",
 
 	// chat_done settles any still-running activity (no eternal spinner).
 	await act(async () => {
-		mock.emit({ type: "chat_delta", id, seq: 0, delta: "Done." });
+		mock.emit({ type: "chat_delta", id, itemId: "a1", seq: 0, delta: "Done." });
 		mock.emit({ type: "chat_done", id });
 	});
 	turn = result.current.turns.find(t => t.kind === "assistant");
@@ -424,7 +424,7 @@ async function completeTurn(mock: MockTransport, send: (t: string) => void, text
 	const req = reqs[reqs.length - 1];
 	if (!req) throw new Error("expected chat_request");
 	await act(async () => {
-		mock.emit({ type: "chat_delta", id: req.id, seq: 0, delta: "ok" });
+		mock.emit({ type: "chat_delta", id: req.id, itemId: "a1", seq: 0, delta: "ok" });
 		mock.emit({ type: "chat_done", id: req.id });
 	});
 }
@@ -592,7 +592,7 @@ test("a chat banked MID-STREAM reads back settled, keeping the text that had arr
 	const req = mock.sent.find((m): m is ChatRequestMsg => m.type === "chat_request");
 	if (!req) throw new Error("expected chat_request");
 	await act(async () => {
-		mock.emit({ type: "chat_delta", id: req.id, seq: 0, delta: "a partial answer" });
+		mock.emit({ type: "chat_delta", id: req.id, itemId: "a1", seq: 0, delta: "a partial answer" });
 		mock.emit({ type: "chat_tool_notice", id: req.id, tool: "read_range", phase: "start" } as never);
 	});
 	expect(result.current.status).toBe("streaming");

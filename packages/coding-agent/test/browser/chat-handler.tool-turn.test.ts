@@ -163,23 +163,52 @@ describe("#2046 A6 — chat_done defers to the final assistant message on a tool
 						// ENDS this call carries a toolCall part with stopReason "toolUse".
 						stream.push({ type: "start", partial: baseAssistant([], "toolUse") });
 						stream.push({
+							type: "text_start",
+							contentIndex: 0,
+							phase: "commentary",
+							partial: baseAssistant([{ type: "text", text: "", phase: "commentary" }], "toolUse"),
+						});
+						stream.push({
 							type: "text_delta",
 							contentIndex: 0,
 							delta: PRE_NARRATION,
-							partial: baseAssistant([{ type: "text", text: PRE_NARRATION }], "toolUse"),
+							partial: baseAssistant([{ type: "text", text: PRE_NARRATION, phase: "commentary" }], "toolUse"),
 						});
-						const msg = baseAssistant([{ type: "text", text: PRE_NARRATION }, toolCall], "toolUse");
+						stream.push({
+							type: "text_end",
+							contentIndex: 0,
+							content: PRE_NARRATION,
+							phase: "commentary",
+							partial: baseAssistant([{ type: "text", text: PRE_NARRATION, phase: "commentary" }], "toolUse"),
+						});
+						const msg = baseAssistant(
+							[{ type: "text", text: PRE_NARRATION, phase: "commentary" }, toolCall],
+							"toolUse",
+						);
 						stream.push({ type: "done", reason: "toolUse", message: msg });
 					} else {
 						// Final call: narrate the result, then complete on stopReason "stop".
 						stream.push({ type: "start", partial: baseAssistant([], "stop") });
 						stream.push({
+							type: "text_start",
+							contentIndex: 0,
+							phase: "final_answer",
+							partial: baseAssistant([{ type: "text", text: "", phase: "final_answer" }], "stop"),
+						});
+						stream.push({
 							type: "text_delta",
 							contentIndex: 0,
 							delta: POST_NARRATION,
-							partial: baseAssistant([{ type: "text", text: POST_NARRATION }], "stop"),
+							partial: baseAssistant([{ type: "text", text: POST_NARRATION, phase: "final_answer" }], "stop"),
 						});
-						const msg = baseAssistant([{ type: "text", text: POST_NARRATION }], "stop");
+						stream.push({
+							type: "text_end",
+							contentIndex: 0,
+							content: POST_NARRATION,
+							phase: "final_answer",
+							partial: baseAssistant([{ type: "text", text: POST_NARRATION, phase: "final_answer" }], "stop"),
+						});
+						const msg = baseAssistant([{ type: "text", text: POST_NARRATION, phase: "final_answer" }], "stop");
 						stream.push({ type: "done", reason: "stop", message: msg });
 					}
 				});
@@ -238,6 +267,12 @@ describe("#2046 A6 — chat_done defers to the final assistant message on a tool
 		await waitFor(() => server.ofType("chat_done").length === 1);
 		expect(server.ofType("chat_done")).toHaveLength(1);
 		expect(server.ofType("chat_error")).toHaveLength(0);
+		expect(server.ofType("chat_message_start").map(frame => frame.phase)).toEqual(["commentary", "final_answer"]);
+		expect(server.ofType("chat_message_end").map(frame => frame.phase)).toEqual(["commentary", "final_answer"]);
+		expect(server.ofType("chat_delta").map(frame => frame.itemId)).toEqual([
+			server.ofType("chat_message_start")[0]?.itemId,
+			server.ofType("chat_message_start")[1]?.itemId,
+		]);
 
 		// FRAME ORDER / TIMING — the load-bearing assertions this fix restores:
 		const preIdx = server.deltaIndex(PRE_NARRATION);

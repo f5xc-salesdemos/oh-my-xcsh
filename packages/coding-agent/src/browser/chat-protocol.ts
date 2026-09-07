@@ -1,8 +1,9 @@
 /**
  * Wire protocol types for the Chrome extension chat side window.
- * Contract source of truth: capabilities.json v2.1.0.
+ * Contract source of truth: capabilities.json v2.2.0.
  */
 
+import type { AssistantMessagePhase } from "@f5-sales-demo/pi-ai";
 // Import the guards + wire types from the PURE leaf modules (not the `../host-tools`
 // barrel), so this browser-safe contract can be consumed by a lib.dom (React)
 // TypeScript program without pulling the RpcHostToolBridge's theme/tool-proxy graph.
@@ -198,11 +199,28 @@ export interface MediaAssetRead extends MediaAssetReadRequest {
 // Outbound messages (xcsh → extension)
 // ---------------------------------------------------------------------------
 
+export type { AssistantMessagePhase };
+
+export interface ChatMessageStart {
+	type: "chat_message_start";
+	id: string;
+	itemId: string;
+	phase: AssistantMessagePhase;
+}
+
 export interface ChatDelta {
 	type: "chat_delta";
 	id: string;
+	itemId: string;
 	seq: number;
 	delta: string;
+}
+
+export interface ChatMessageEnd {
+	type: "chat_message_end";
+	id: string;
+	itemId: string;
+	phase: AssistantMessagePhase;
 }
 
 export interface ChatDone {

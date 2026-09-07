@@ -5,7 +5,7 @@ import { initTurn, reduceChatTurn } from "../src/core/protocol/reduce";
 const ID = "c-1";
 
 function delta(seq: number, text: string): ChatDeltaMsg {
-	return { type: "chat_delta", id: ID, seq, delta: text };
+	return { type: "chat_delta", id: ID, itemId: "a1", seq, delta: text };
 }
 
 function done(refs?: ChatDoneMsg["references"]): ChatDoneMsg {
@@ -59,18 +59,24 @@ describe("reduceChatTurn — out-of-order deltas ordered by seq", () => {
 		// seq 1 arrives before seq 0
 		state = reduceChatTurn(state, delta(1, "lo"));
 		expect(state.text).toBe(""); // seq 0 not yet seen — still buffered
-		expect(state.lastSeq).toBe(-1);
+		expect(state.items[0]?.lastSeq).toBe(-1);
 		// seq 0 arrives — both should flush in order
 		state = reduceChatTurn(state, delta(0, "Hel"));
 		expect(state.text).toBe("Hello");
-		expect(state.lastSeq).toBe(1);
+		expect(state.items[0]?.lastSeq).toBe(1);
 		state = reduceChatTurn(state, done());
 		expect(state.status).toBe("done");
 	});
 
 	it("ignores messages for a different turn id", () => {
 		const state = initTurn(ID);
-		const other = reduceChatTurn(state, { type: "chat_delta", id: "c-other", seq: 0, delta: "x" });
+		const other = reduceChatTurn(state, {
+			type: "chat_delta",
+			id: "c-other",
+			itemId: "a1",
+			seq: 0,
+			delta: "x",
+		});
 		expect(other).toBe(state);
 	});
 });
@@ -82,23 +88,23 @@ describe("reduceChatTurn — pending flush + clear on terminal close", () => {
 		// seq 2 arrives but seq 0 and 1 never arrive — contiguous flush from lastSeq+1=0 stops immediately
 		state = reduceChatTurn(state, delta(2, "orphan"));
 		expect(state.text).toBe("");
-		expect(Object.keys(state.pending)).toHaveLength(1);
+		expect(Object.keys(state.items[0]?.pending ?? {})).toHaveLength(1);
 		// chat_done: contiguous flush starts at seq 0 which is absent → no flushing;
 		// seq 2 in pending is discarded (missing data cannot be invented).
 		state = reduceChatTurn(state, done());
 		expect(state.status).toBe("done");
 		expect(state.text).toBe("");
-		expect(state.pending).toEqual({});
+		expect(state.items[0]?.pending).toEqual({});
 	});
 
 	it("drops gapped pending deltas and clears pending on chat_error (Test A — error variant)", () => {
 		let state = initTurn(ID);
 		state = reduceChatTurn(state, delta(3, "orphan"));
-		expect(Object.keys(state.pending)).toHaveLength(1);
+		expect(Object.keys(state.items[0]?.pending ?? {})).toHaveLength(1);
 		state = reduceChatTurn(state, error("no-worker"));
 		expect(state.status).toBe("error");
 		expect(state.text).toBe("");
-		expect(state.pending).toEqual({});
+		expect(state.items[0]?.pending).toEqual({});
 	});
 
 	// Test B: contiguous heads always flush on delta arrival, so by the time chat_done arrives
@@ -110,10 +116,10 @@ describe("reduceChatTurn — pending flush + clear on terminal close", () => {
 		state = reduceChatTurn(state, delta(1, "B")); // fills gap → flushes 1 then 2 → text='ABC', pending={}
 		// Pending is already empty; the flush in chat_done is a no-op.
 		expect(state.text).toBe("ABC");
-		expect(state.pending).toEqual({});
+		expect(state.items[0]?.pending).toEqual({});
 		state = reduceChatTurn(state, done());
 		expect(state.status).toBe("done");
 		expect(state.text).toBe("ABC");
-		expect(state.pending).toEqual({});
+		expect(state.items[0]?.pending).toEqual({});
 	});
 });

@@ -2,6 +2,7 @@ import type { AgentMessage } from "@f5-sales-demo/pi-agent-core";
 import { type AssistantMessage, type Context, streamSimple } from "@f5-sales-demo/pi-ai";
 import { prompt } from "@f5-sales-demo/pi-utils";
 import btwUserPrompt from "../../prompts/system/btw-user.md" with { type: "text" };
+import { finalAnswerText } from "../../session/final-answer";
 import { toReasoningEffort } from "../../thinking";
 import { BtwPanelComponent } from "../components/btw-panel";
 import type { InteractiveModeContext } from "../types";
@@ -166,13 +167,7 @@ export class BtwController {
 	}
 
 	#assistantText(message: AssistantMessage): string {
-		let text = "";
-		for (const content of message.content) {
-			if (content.type === "text") {
-				text += content.text;
-			}
-		}
-		return text.trim();
+		return finalAnswerText(message).trim();
 	}
 
 	#closeActiveRequest(options: { abort: boolean }): void {

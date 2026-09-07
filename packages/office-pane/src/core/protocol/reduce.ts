@@ -1,101 +1,99 @@
-/**
- * Pure reduceChatTurn: folds one stream event into immutable TurnState.
- *
- * KEPT LOCAL: this reducer has no native xcsh counterpart. It is browser-safe
- * presentation logic — accumulating streamed deltas into ordered text with one
- * enhancement over a naive fold: out-of-order deltas are buffered by `seq` and
- * flushed in ascending order once the gap closes, so the accumulated text is
- * always seq-ordered regardless of network arrival order.
- */
+/** Pure reducer for the ordered assistant-item chat stream. */
 
+import type { AssistantMessagePhase } from "@f5-sales-demo/xcsh/browser/chat-protocol";
 import type { ChatRefWire, ChatStreamMsg } from "./messages";
 import type { ChatErrorReason } from "./reasons";
 
-// ---------------------------------------------------------------------------
-// State
-// ---------------------------------------------------------------------------
-
-export interface TurnState {
+export interface AssistantTurnItem {
 	readonly id: string;
+	readonly phase: AssistantMessagePhase;
 	readonly text: string;
 	readonly status: "streaming" | "done" | "error";
-	readonly references: readonly ChatRefWire[];
-	readonly reason?: ChatErrorReason;
-	/** Highest seq number whose delta has been appended to `text`. Starts at -1. */
 	readonly lastSeq: number;
-	/** Out-of-order deltas buffered until their preceding seq arrives. */
 	readonly pending: Readonly<Record<number, string>>;
 }
 
-export function initTurn(id: string): TurnState {
-	return { id, text: "", status: "streaming", references: [], lastSeq: -1, pending: {} };
+export interface TurnState {
+	readonly id: string;
+	readonly items: readonly AssistantTurnItem[];
+	/** Aggregate transcript text, including commentary, for the existing presentation. */
+	readonly text: string;
+	/** Speakable/terminal text only. */
+	readonly finalText: string;
+	readonly status: "streaming" | "done" | "error";
+	readonly references: readonly ChatRefWire[];
+	readonly reason?: ChatErrorReason;
 }
 
-// ---------------------------------------------------------------------------
-// Reducer
-// ---------------------------------------------------------------------------
+export function initTurn(id: string): TurnState {
+	return { id, items: [], text: "", finalText: "", status: "streaming", references: [] };
+}
+
+function aggregate(items: readonly AssistantTurnItem[]): Pick<TurnState, "text" | "finalText"> {
+	const visible = items.map(item => item.text).filter(Boolean);
+	const final = items
+		.filter(item => item.phase === "final_answer")
+		.map(item => item.text)
+		.filter(Boolean);
+	return { text: visible.join("\n\n"), finalText: final.join("\n") };
+}
+
+function updateItem(
+	state: TurnState,
+	itemId: string,
+	update: (item: AssistantTurnItem) => AssistantTurnItem,
+	phase: AssistantMessagePhase = "final_answer",
+): TurnState {
+	let found = false;
+	const items = state.items.map(item => {
+		if (item.id !== itemId) return item;
+		found = true;
+		return update(item);
+	});
+	if (!found) {
+		items.push(update({ id: itemId, phase, text: "", status: "streaming", lastSeq: -1, pending: {} }));
+	}
+	return { ...state, items, ...aggregate(items) };
+}
 
 /** Fold one inbound stream event into turn state. Idempotent after terminal. */
 export function reduceChatTurn(state: TurnState, msg: ChatStreamMsg): TurnState {
-	if (msg.id !== state.id) return state; // not this turn — ignore
-	if (state.status !== "streaming") return state; // terminal: ignore stragglers
+	if (msg.id !== state.id) return state;
+	if (state.status !== "streaming") return state;
+
+	if (msg.type === "chat_message_start") {
+		return updateItem(state, msg.itemId, item => ({ ...item, phase: msg.phase }), msg.phase);
+	}
 
 	if (msg.type === "chat_delta") {
-		if (msg.seq <= state.lastSeq) return state; // duplicate
+		return updateItem(state, msg.itemId, item => {
+			if (msg.seq <= item.lastSeq || Object.hasOwn(item.pending, msg.seq)) return item;
+			const merged: Record<number, string> = { ...item.pending, [msg.seq]: msg.delta };
+			let text = item.text;
+			let lastSeq = item.lastSeq;
+			while (Object.hasOwn(merged, lastSeq + 1)) {
+				text += merged[lastSeq + 1];
+				delete merged[lastSeq + 1];
+				lastSeq++;
+			}
+			return { ...item, text, lastSeq, pending: merged };
+		});
+	}
 
-		// Merge incoming delta into the pending buffer
-		const merged: Record<number, string> = { ...state.pending, [msg.seq]: msg.delta };
-
-		// Flush all consecutive deltas starting from lastSeq + 1
-		let text = state.text;
-		let lastSeq = state.lastSeq;
-		let next = lastSeq + 1;
-		while (Object.hasOwn(merged, next)) {
-			text += merged[next];
-			lastSeq = next;
-			next++;
-		}
-
-		// Retain only the unflushed gap entries
-		const pending: Record<number, string> = {};
-		for (const [k, v] of Object.entries(merged)) {
-			if (Number(k) > lastSeq) pending[Number(k)] = v;
-		}
-
-		return { ...state, text, lastSeq, pending };
+	if (msg.type === "chat_message_end") {
+		return updateItem(
+			state,
+			msg.itemId,
+			item => ({ ...item, phase: msg.phase, status: "done", pending: {} }),
+			msg.phase,
+		);
 	}
 
 	if (msg.type === "chat_done") {
-		// Flush the contiguous run from pending before closing.
-		// WebSocket delivery is ordered per-connection, so `pending` is normally empty;
-		// this flush keeps the (plan-mandated) buffering internally coherent on close.
-		// A genuine seq gap (a permanently missing delta) is unrecoverable — its gapped
-		// successors are intentionally discarded when the turn closes, which is correct
-		// (missing data cannot be invented).
-		let text = state.text;
-		let lastSeq = state.lastSeq;
-		let next = lastSeq + 1;
-		while (Object.hasOwn(state.pending, next)) {
-			text += state.pending[next];
-			lastSeq = next;
-			next++;
-		}
-		return { ...state, text, lastSeq, pending: {}, status: "done", references: msg.references ?? [] };
+		const items = state.items.map(item => ({ ...item, status: "done" as const, pending: {} }));
+		return { ...state, items, ...aggregate(items), status: "done", references: msg.references ?? [] };
 	}
 
-	// chat_error — same flush logic: clear pending, keep coherence.
-	// WebSocket delivery is ordered per-connection, so `pending` is normally empty;
-	// this flush keeps the (plan-mandated) buffering internally coherent on close.
-	// A genuine seq gap (a permanently missing delta) is unrecoverable — its gapped
-	// successors are intentionally discarded when the turn closes, which is correct
-	// (missing data cannot be invented).
-	let text = state.text;
-	let lastSeq = state.lastSeq;
-	let next = lastSeq + 1;
-	while (Object.hasOwn(state.pending, next)) {
-		text += state.pending[next];
-		lastSeq = next;
-		next++;
-	}
-	return { ...state, text, lastSeq, pending: {}, status: "error", reason: msg.reason };
+	const items = state.items.map(item => ({ ...item, status: "error" as const, pending: {} }));
+	return { ...state, items, ...aggregate(items), status: "error", reason: msg.reason };
 }

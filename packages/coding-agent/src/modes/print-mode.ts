@@ -8,6 +8,7 @@
 import type { AgentMessage, ThinkingLevel } from "@f5-sales-demo/pi-agent-core";
 import type { AssistantMessage, ImageContent, Model } from "@f5-sales-demo/pi-ai";
 import type { AgentSession, AgentSessionEvent } from "../session/agent-session";
+import { finalAnswerText } from "../session/final-answer";
 import type { SessionHeader } from "../session/session-manager";
 
 /**
@@ -210,11 +211,8 @@ export async function runPrintMode(session: AgentSession, options: PrintModeOpti
 		if (failed) {
 			process.stderr.write(`${assistantMsg.errorMessage || `Request ${assistantMsg.stopReason}`}\n`);
 		} else {
-			for (const content of assistantMsg.content) {
-				if (content.type === "text") {
-					process.stdout.write(`${content.text}\n`);
-				}
-			}
+			const text = finalAnswerText(assistantMsg);
+			if (text) process.stdout.write(`${text}\n`);
 		}
 	}
 

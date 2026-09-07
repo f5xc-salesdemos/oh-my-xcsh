@@ -145,7 +145,8 @@ describe("host profiles", () => {
 	it("chrome retains its behavioral rules and keeps authentication operator-owned", () => {
 		const t = HOST_PROFILES.chrome.systemPrompt;
 		for (const keyword of [
-			"TEXT FIRST",
+			"COMMENTARY POLICY",
+			"No commentary for trivial no-tool work",
 			"catalog_workflow_runner",
 			"DEPENDENCY ORDER",
 			"port 19222",
@@ -154,6 +155,7 @@ describe("host profiles", () => {
 		]) {
 			expect(t).toContain(keyword);
 		}
+		expect(t).not.toContain("ALWAYS respond with TEXT FIRST");
 		expect(t).not.toContain("login tool");
 	});
 

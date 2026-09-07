@@ -11,6 +11,7 @@ export { HostToolDispatcher } from "./host-tools";
 // Protocol surface (wire types re-homed onto the native xcsh contract)
 export type {
 	AgentToolResult,
+	AssistantTurnItem,
 	ChatDeltaMsg,
 	ChatDoneMsg,
 	ChatErrorMsg,
@@ -19,6 +20,8 @@ export type {
 	ChatInboundMsg,
 	ChatKeepaliveMsg,
 	ChatMediaMsg,
+	ChatMessageEndMsg,
+	ChatMessageStartMsg,
 	ChatRefWire,
 	ChatRequestMsg,
 	ChatStopMsg,
@@ -59,6 +62,8 @@ export {
 	isChatError,
 	isChatKeepalive,
 	isChatMedia,
+	isChatMessageEnd,
+	isChatMessageStart,
 	isChatToolNotice,
 	isConfigureAck,
 	isConfigureError,

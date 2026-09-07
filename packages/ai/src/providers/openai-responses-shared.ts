@@ -14,6 +14,7 @@ import { calculateCost } from "../models";
 import type {
 	Api,
 	AssistantMessage,
+	AssistantMessagePhase,
 	ImageContent,
 	Model,
 	StopReason,
@@ -31,6 +32,10 @@ export function encodeTextSignatureV1(id: string, phase?: TextSignatureV1["phase
 	const payload: TextSignatureV1 = { v: 1, id };
 	if (phase) payload.phase = phase;
 	return JSON.stringify(payload);
+}
+
+export function resolveAssistantMessagePhase(phase: unknown): AssistantMessagePhase {
+	return phase === "commentary" ? "commentary" : "final_answer";
 }
 
 export function parseTextSignature(
@@ -152,7 +157,7 @@ export function convertResponsesAssistantMessage<TApi extends Api>(
 				content: [{ type: "output_text", text: block.text.toWellFormed(), annotations: [] }],
 				status: "completed",
 				id: msgId,
-				phase: parsedSignature?.phase,
+				phase: parsedSignature?.phase ?? block.phase,
 			} satisfies ResponseOutputMessage);
 			continue;
 		}
@@ -262,9 +267,14 @@ export async function processResponsesStream<TApi extends Api>(
 				stream.push({ type: "thinking_start", contentIndex: blockIndex(), partial: output });
 			} else if (item.type === "message") {
 				currentItem = item;
-				currentBlock = { type: "text", text: "" };
+				currentBlock = { type: "text", text: "", phase: resolveAssistantMessagePhase(item.phase) };
 				output.content.push(currentBlock);
-				stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
+				stream.push({
+					type: "text_start",
+					contentIndex: blockIndex(),
+					phase: currentBlock.phase ?? "final_answer",
+					partial: output,
+				});
 			} else if (item.type === "function_call") {
 				currentItem = item;
 				currentBlock = {
@@ -380,11 +390,13 @@ export async function processResponsesStream<TApi extends Api>(
 				currentBlock.text = item.content
 					.map(part => (part.type === "output_text" ? (part.text ?? "") : (part.refusal ?? "")))
 					.join("");
-				currentBlock.textSignature = encodeTextSignatureV1(item.id, item.phase ?? undefined);
+				currentBlock.phase = resolveAssistantMessagePhase(item.phase);
+				currentBlock.textSignature = encodeTextSignatureV1(item.id, currentBlock.phase);
 				stream.push({
 					type: "text_end",
 					contentIndex: blockIndex(),
 					content: currentBlock.text,
+					phase: currentBlock.phase ?? "final_answer",
 					partial: output,
 				});
 				currentBlock = null;
