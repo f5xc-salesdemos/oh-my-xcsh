@@ -63,7 +63,12 @@ import {
 	transformRequestBody,
 } from "./openai-codex/request-transformer";
 import { parseCodexError } from "./openai-codex/response-handler";
-import { encodeTextSignatureV1, mapOpenAIResponsesStopReason, parseTextSignature } from "./openai-responses-shared";
+import {
+	encodeTextSignatureV1,
+	mapOpenAIResponsesStopReason,
+	parseTextSignature,
+	resolveAssistantMessagePhase,
+} from "./openai-responses-shared";
 import { transformMessages } from "./transform-messages";
 
 export interface OpenAICodexResponsesOptions extends StreamOptions {
@@ -747,11 +752,21 @@ function handleCodexStreamEvent(args: {
 		runtime.currentBlock = createOutputBlockForItem(item);
 		if (!runtime.currentBlock) return firstTokenTime;
 		output.content.push(runtime.currentBlock);
-		stream.push({
-			type: getOutputBlockStartEventType(runtime.currentBlock),
-			contentIndex: blockIndex(),
-			partial: output,
-		});
+		if (runtime.currentBlock.type === "text") {
+			stream.push({
+				type: "text_start",
+				contentIndex: blockIndex(),
+				phase: runtime.currentBlock.phase ?? "final_answer",
+				partial: output,
+			});
+		} else {
+			const type = getOutputBlockStartEventType(runtime.currentBlock);
+			if (type === "thinking_start") {
+				stream.push({ type, contentIndex: blockIndex(), partial: output });
+			} else {
+				stream.push({ type: "toolcall_start", contentIndex: blockIndex(), partial: output });
+			}
+		}
 		return firstTokenTime;
 	}
 
@@ -838,7 +853,7 @@ function createOutputBlockForItem(item: CodexEventItem): CodexOutputBlock | null
 		return { type: "thinking", thinking: "" };
 	}
 	if (item.type === "message") {
-		return { type: "text", text: "" };
+		return { type: "text", text: "", phase: resolveAssistantMessagePhase(item.phase) };
 	}
 	if (item.type === "function_call") {
 		return {
@@ -986,12 +1001,14 @@ function handleOutputItemDone(
 		runtime.currentBlock.text = item.content
 			.map(content => (content.type === "output_text" ? content.text : content.refusal))
 			.join("");
-		const phase = item.phase === "commentary" || item.phase === "final_answer" ? item.phase : undefined;
+		const phase = resolveAssistantMessagePhase(item.phase);
+		runtime.currentBlock.phase = phase;
 		runtime.currentBlock.textSignature = encodeTextSignatureV1(item.id, phase);
 		stream.push({
 			type: "text_end",
 			contentIndex: blockIndex(),
 			content: runtime.currentBlock.text,
+			phase,
 			partial: output,
 		});
 		runtime.currentBlock = null;
@@ -2175,7 +2192,7 @@ function convertMessages(model: Model<"openai-codex-responses">, context: Contex
 						content: [{ type: "output_text", text: textBlock.text.toWellFormed(), annotations: [] }],
 						status: "completed",
 						id: msgId,
-						phase: parsedSignature?.phase,
+						phase: parsedSignature?.phase ?? textBlock.phase,
 					} satisfies ResponseOutputMessage);
 					continue;
 				}

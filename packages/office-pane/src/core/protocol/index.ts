@@ -7,6 +7,8 @@ export type {
 	ChatInboundMsg,
 	ChatKeepaliveMsg,
 	ChatMediaMsg,
+	ChatMessageEndMsg,
+	ChatMessageStartMsg,
 	ChatRefWire,
 	ChatRequestMsg,
 	ChatStopMsg,
@@ -47,6 +49,8 @@ export {
 	isChatError,
 	isChatKeepalive,
 	isChatMedia,
+	isChatMessageEnd,
+	isChatMessageStart,
 	isChatToolNotice,
 	isConfigureAck,
 	isConfigureError,
@@ -61,5 +65,5 @@ export {
 } from "./messages";
 export type { ChatErrorReason, InteractionMode } from "./reasons";
 export { CHAT_ERROR_REASONS, INTERACTION_MODES } from "./reasons";
-export type { TurnState } from "./reduce";
+export type { AssistantTurnItem, TurnState } from "./reduce";
 export { initTurn, reduceChatTurn } from "./reduce";

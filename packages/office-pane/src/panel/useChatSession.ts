@@ -388,7 +388,13 @@ export function useChatSession(transport: Transport, hooks?: ChatSessionHooks): 
 				return;
 			}
 			// Narrow to ChatStreamMsg via the discriminated union on `type`.
-			if (msg.type === "chat_delta" || msg.type === "chat_done" || msg.type === "chat_error") {
+			if (
+				msg.type === "chat_message_start" ||
+				msg.type === "chat_delta" ||
+				msg.type === "chat_message_end" ||
+				msg.type === "chat_done" ||
+				msg.type === "chat_error"
+			) {
 				const terminal = msg.type === "chat_done" || msg.type === "chat_error";
 				setTurns(prev =>
 					prev.map(turn => {

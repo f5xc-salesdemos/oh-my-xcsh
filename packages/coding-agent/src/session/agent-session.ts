@@ -167,6 +167,7 @@ import {
 	shouldCompact,
 } from "./compaction";
 import { DEFAULT_PRUNE_CONFIG, pruneToolOutputs } from "./compaction/pruning";
+import { finalAnswerText } from "./final-answer";
 import {
 	type BashExecutionMessage,
 	type CompactionSummaryMessage,
@@ -7572,14 +7573,7 @@ export class AgentSession {
 
 		if (!lastAssistant) return undefined;
 
-		let text = "";
-		for (const content of (lastAssistant as AssistantMessage).content) {
-			if (content.type === "text") {
-				text += content.text;
-			}
-		}
-
-		return text.trim() || undefined;
+		return finalAnswerText(lastAssistant as AssistantMessage).trim() || undefined;
 	}
 
 	/**

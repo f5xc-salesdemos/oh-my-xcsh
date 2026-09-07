@@ -16,7 +16,15 @@ function assistant(
 ): AssistantTurn {
 	return {
 		kind: "assistant",
-		state: { id, text, status: "done", references: [], lastSeq: text.length - 1, pending: {}, ...over },
+		state: {
+			id,
+			items: [{ id: `${id}:assistant:0`, phase: "final_answer", text, status: "done", lastSeq: 0, pending: {} }],
+			text,
+			finalText: text,
+			status: "done",
+			references: [],
+			...over,
+		},
 		activities,
 	};
 }

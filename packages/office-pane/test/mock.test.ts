@@ -10,7 +10,7 @@ describe("MockTransport", () => {
 		const received: ChatInbound[] = [];
 		t.onMessage(m => received.push(m));
 
-		const delta = { type: "chat_delta" as const, id: "x", seq: 0, delta: "hello" };
+		const delta = { type: "chat_delta" as const, id: "x", itemId: "a1", seq: 0, delta: "hello" };
 		const done = { type: "chat_done" as const, id: "x" };
 		t.emit(delta);
 		t.emit(done);
@@ -33,13 +33,13 @@ describe("MockTransport", () => {
 		const received: ChatInbound[] = [];
 		const unsub = t.onMessage(m => received.push(m));
 
-		const delta1 = { type: "chat_delta" as const, id: "x", seq: 0, delta: "a" };
+		const delta1 = { type: "chat_delta" as const, id: "x", itemId: "a1", seq: 0, delta: "a" };
 		t.emit(delta1);
 		expect(received).toHaveLength(1);
 
 		unsub();
 
-		const delta2 = { type: "chat_delta" as const, id: "x", seq: 1, delta: "b" };
+		const delta2 = { type: "chat_delta" as const, id: "x", itemId: "a1", seq: 1, delta: "b" };
 		t.emit(delta2);
 		expect(received).toHaveLength(1); // no new message after unsub
 	});
@@ -52,7 +52,7 @@ describe("MockTransport", () => {
 		t.dispose();
 		expect(t.state).toBe("closed");
 
-		const delta = { type: "chat_delta" as const, id: "x", seq: 0, delta: "z" };
+		const delta = { type: "chat_delta" as const, id: "x", itemId: "a1", seq: 0, delta: "z" };
 		t.emit(delta);
 		expect(received).toHaveLength(0);
 	});

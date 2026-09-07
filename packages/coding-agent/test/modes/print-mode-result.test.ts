@@ -3,10 +3,13 @@ import type { AssistantMessage } from "@f5-sales-demo/pi-ai";
 import { runPrintMode } from "../../src/modes/print-mode";
 import type { AgentSession } from "../../src/session/agent-session";
 
-function assistantMessage(stopReason: "stop" | "error" | "aborted"): AssistantMessage {
+function assistantMessage(
+	stopReason: "stop" | "error" | "aborted",
+	content: AssistantMessage["content"] = stopReason === "stop" ? [{ type: "text", text: "ok" }] : [],
+): AssistantMessage {
 	return {
 		role: "assistant",
-		content: stopReason === "stop" ? [{ type: "text", text: "ok" }] : [],
+		content,
 		api: "openai-completions",
 		provider: "litellm",
 		model: "gpt-5.6-sol",
@@ -81,5 +84,29 @@ describe("print mode result", () => {
 
 		expect(result).toBe(0);
 		expect(dispose).not.toHaveBeenCalled();
+	});
+
+	it("prints only final-answer text and keeps missing-phase fallback semantics", async () => {
+		const { session } = fakeSession(
+			assistantMessage("stop", [
+				{ type: "text", text: "Checking.", phase: "commentary" },
+				{ type: "text", text: "Answer one.", phase: "final_answer" },
+				{ type: "text", text: "Answer two." },
+			]),
+		);
+		const originalWrite = process.stdout.write;
+		let stdout = "";
+		process.stdout.write = ((chunk: string | Uint8Array, callback?: (error?: Error | null) => void) => {
+			stdout += chunk.toString();
+			callback?.();
+			return true;
+		}) as typeof process.stdout.write;
+
+		try {
+			expect(await runPrintMode(session, { mode: "text" })).toBe(0);
+			expect(stdout).toBe("Answer one.\nAnswer two.\n");
+		} finally {
+			process.stdout.write = originalWrite;
+		}
 	});
 });

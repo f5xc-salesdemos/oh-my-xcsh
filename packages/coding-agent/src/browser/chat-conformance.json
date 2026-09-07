@@ -1,5 +1,5 @@
 {
-  "contractVersion": "2.1.0",
+  "contractVersion": "2.2.0",
   "schemas": {
     "chat_request": {
       "type": "object",
@@ -180,11 +180,22 @@
         }
       }
     },
+    "chat_message_start": {
+      "type": "object",
+      "required": ["type", "id", "itemId", "phase"],
+      "properties": {
+        "type": { "const": "chat_message_start", "type": "string" },
+        "id": { "pattern": "^c-", "type": "string" },
+        "itemId": { "minLength": 1, "type": "string" },
+        "phase": { "enum": ["commentary", "final_answer"], "type": "string" }
+      }
+    },
     "chat_delta": {
       "type": "object",
       "required": [
         "type",
         "id",
+        "itemId",
         "seq",
         "delta"
       ],
@@ -197,12 +208,26 @@
           "pattern": "^c-",
           "type": "string"
         },
+        "itemId": {
+          "minLength": 1,
+          "type": "string"
+        },
         "seq": {
           "type": "number"
         },
         "delta": {
           "type": "string"
         }
+      }
+    },
+    "chat_message_end": {
+      "type": "object",
+      "required": ["type", "id", "itemId", "phase"],
+      "properties": {
+        "type": { "const": "chat_message_end", "type": "string" },
+        "id": { "pattern": "^c-", "type": "string" },
+        "itemId": { "minLength": 1, "type": "string" },
+        "phase": { "enum": ["commentary", "final_answer"], "type": "string" }
       }
     },
     "chat_done": {
@@ -1179,17 +1204,31 @@
         "type": "chat_stop",
         "id": "c-1111"
       },
+      "chat_message_start": {
+        "type": "chat_message_start",
+        "id": "c-1111",
+        "itemId": "c-1111:assistant:0",
+        "phase": "commentary"
+      },
       "chat_delta": {
         "type": "chat_delta",
         "id": "c-1111",
+        "itemId": "c-1111:assistant:0",
         "seq": 0,
         "delta": "This LB "
       },
       "chat_delta_1": {
         "type": "chat_delta",
         "id": "c-1111",
+        "itemId": "c-1111:assistant:0",
         "seq": 1,
         "delta": "routes traffic."
+      },
+      "chat_message_end": {
+        "type": "chat_message_end",
+        "id": "c-1111",
+        "itemId": "c-1111:assistant:0",
+        "phase": "commentary"
       },
       "chat_done": {
         "type": "chat_done",

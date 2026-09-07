@@ -26,6 +26,8 @@ import type {
 	ChatImage,
 	ChatKeepalive,
 	ChatMedia,
+	ChatMessageEnd,
+	ChatMessageStart,
 	ChatReference,
 	ChatRequest,
 	ChatStop,
@@ -64,6 +66,8 @@ export type {
 	ChatImage as ChatImageMsg,
 	ChatKeepalive as ChatKeepaliveMsg,
 	ChatMedia as ChatMediaMsg,
+	ChatMessageEnd as ChatMessageEndMsg,
+	ChatMessageStart as ChatMessageStartMsg,
 	ChatReference as ChatRefWire,
 	ChatRequest as ChatRequestMsg,
 	ChatStop as ChatStopMsg,
@@ -116,7 +120,7 @@ export interface ChatToolNoticeMsg {
 // Unions
 // ---------------------------------------------------------------------------
 
-export type ChatStreamMsg = ChatDelta | ChatDone | ChatError;
+export type ChatStreamMsg = ChatMessageStart | ChatDelta | ChatMessageEnd | ChatDone | ChatError;
 
 /**
  * Messages the worker sends to the panel (inbound to the panel). Includes the
@@ -149,6 +153,14 @@ function isObj(v: unknown): v is Record<string, unknown> {
 
 export function isChatDelta(msg: unknown): msg is ChatDelta {
 	return isObj(msg) && msg.type === "chat_delta";
+}
+
+export function isChatMessageStart(msg: unknown): msg is ChatMessageStart {
+	return isObj(msg) && msg.type === "chat_message_start";
+}
+
+export function isChatMessageEnd(msg: unknown): msg is ChatMessageEnd {
+	return isObj(msg) && msg.type === "chat_message_end";
 }
 
 export function isChatDone(msg: unknown): msg is ChatDone {
