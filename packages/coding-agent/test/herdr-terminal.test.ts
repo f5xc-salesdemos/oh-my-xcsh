@@ -62,7 +62,7 @@ function binding(ownerToken = "owner-a"): HerdrBindingV1 {
 	};
 }
 
-describe("Herdr protocol-19 client", () => {
+describe("Herdr protocol client", () => {
 	test("validates the protocol and reconnects for each request", async () => {
 		const fake = await fakeHerdr(request =>
 			request.method === "ping"
@@ -79,8 +79,36 @@ describe("Herdr protocol-19 client", () => {
 		}
 	});
 
+	test("negotiates protocol 20 and advertised capabilities", async () => {
+		const fake = await fakeHerdr(request =>
+			request.method === "ping"
+				? { type: "pong", protocol: 20, version: "test", capabilities: { agent_turn_journal: true } }
+				: { type: "workspace_list", workspaces: [] },
+		);
+		try {
+			const client = new HerdrClient(fake.socketPath);
+			await client.ensureProtocol();
+			expect(client.protocolVersion).toBe(20);
+			expect(client.hasCapability("agent_turn_journal")).toBe(true);
+			expect(client.hasCapability("unknown")).toBe(false);
+		} finally {
+			await fake.close();
+		}
+	});
+
 	test("rejects incompatible servers", async () => {
 		const fake = await fakeHerdr(() => ({ type: "pong", protocol: 17, version: "old" }));
+		try {
+			await expect(new HerdrClient(fake.socketPath).ensureProtocol()).rejects.toMatchObject({
+				code: "protocol_mismatch",
+			});
+		} finally {
+			await fake.close();
+		}
+	});
+
+	test("rejects unreviewed future protocols", async () => {
+		const fake = await fakeHerdr(() => ({ type: "pong", protocol: 21, version: "future" }));
 		try {
 			await expect(new HerdrClient(fake.socketPath).ensureProtocol()).rejects.toMatchObject({
 				code: "protocol_mismatch",
