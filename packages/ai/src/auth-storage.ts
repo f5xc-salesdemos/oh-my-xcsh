@@ -94,6 +94,8 @@ export type AuthCredentialEntry = AuthCredential | AuthCredential[];
 
 export type AuthStorageData = Record<string, AuthCredentialEntry>;
 
+export type AuthCredentialSource = "stored-oauth" | "stored-api-key" | "environment" | "runtime" | "configuration";
+
 /**
  * Serialized representation of AuthStorage for passing to subagent workers.
  * Contains only the essential credential data, not runtime state.
@@ -712,6 +714,18 @@ export class AuthStorage {
 		if (getEnvApiKey(provider)) return true;
 		if (this.#fallbackResolver?.(provider)) return true;
 		return false;
+	}
+
+	/** Describe where the effective credential came from without exposing its value. */
+	getCredentialSource(provider: string): AuthCredentialSource | undefined {
+		provider = canonicalizeOAuthProviderId(provider);
+		if (this.#runtimeOverrides.has(provider)) return "runtime";
+		const stored = this.#getCredentialsForProvider(provider);
+		if (stored.some(credential => credential.type === "api_key")) return "stored-api-key";
+		if (stored.some(credential => credential.type === "oauth")) return "stored-oauth";
+		if (getEnvApiKey(provider)) return "environment";
+		if (this.#fallbackResolver?.(provider)) return "configuration";
+		return undefined;
 	}
 
 	/**

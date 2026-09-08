@@ -13,7 +13,13 @@ import {
 	truncateToWidth,
 	visibleWidth,
 } from "@f5-sales-demo/pi-tui";
-import type { ModelRegistry, ProviderDiscoveryState, ProviderDiscoveryStatus } from "../../config/model-registry";
+import type {
+	ModelRegistry,
+	ProviderAccessState,
+	ProviderDiscoveryState,
+	ProviderDiscoveryStatus,
+	ProviderPickerMetadata,
+} from "../../config/model-registry";
 import { getKnownRoleIds, getRoleInfo, MODEL_ROLE_IDS, MODEL_ROLES } from "../../config/model-registry";
 import { resolveModelRoleValue } from "../../config/model-resolver";
 import type { Settings } from "../../config/settings";
@@ -50,6 +56,9 @@ export interface ModelItem {
 	id: string;
 	model: Model;
 	selector: string;
+	disabled?: boolean;
+	sectionLabel?: string;
+	groupId?: string;
 }
 
 interface CanonicalModelItem {
@@ -120,7 +129,7 @@ function getModelFamily(model: Model): string {
 function modelHierarchyKey(item: ModelItem, includeProvider: boolean): string {
 	return [
 		includeProvider ? getProviderDisplayName(item.provider) : "",
-		getModelPublisher(item.model),
+		item.sectionLabel ?? getModelPublisher(item.model),
 		getModelFamily(item.model),
 	]
 		.join("\0")
@@ -219,13 +228,21 @@ export interface ProviderModelGroup {
 	providers: string[];
 }
 
-function modelItems(models: readonly Model[], currentOnly = true): ModelItem[] {
+function modelItems(
+	models: readonly Model[],
+	currentOnly = true,
+	getPickerMetadata: (provider: string) => ProviderPickerMetadata | undefined = () => undefined,
+	getAccessState: (provider: string) => ProviderAccessState | undefined = () => undefined,
+): ModelItem[] {
 	return presentModelsForDefaultPicker(currentOnly ? filterCurrentBrowserModels(models) : models).map(item => ({
 		kind: "provider",
 		provider: item.model.provider,
 		id: item.displaySelector.slice(item.displaySelector.indexOf("/") + 1),
 		model: item.model,
 		selector: item.selector,
+		disabled: getAccessState(item.model.provider)?.selectable === false,
+		sectionLabel: getPickerMetadata(item.model.provider)?.sectionLabel,
+		groupId: getPickerMetadata(item.model.provider)?.groupId,
 	}));
 }
 
@@ -238,39 +255,58 @@ export function buildProviderModelGroups(
 	hasAuth: (provider: string) => boolean = () => true,
 	currentOnly = true,
 	inventory: readonly string[] = [],
+	getPickerMetadata: (provider: string) => ProviderPickerMetadata | undefined = () => undefined,
+	getAccessState: (provider: string) => ProviderAccessState | undefined = () => undefined,
 ): ProviderModelGroup[] {
-	const items = modelItems(models, currentOnly);
+	const items = modelItems(models, currentOnly, getPickerMetadata, getAccessState);
 	const byProvider = new Map<string, ModelItem[]>();
 	for (const item of items) {
-		const providerItems = byProvider.get(item.provider) ?? [];
+		const providerItems = byProvider.get(item.groupId ?? item.provider) ?? [];
 		providerItems.push(item);
-		byProvider.set(item.provider, providerItems);
+		byProvider.set(item.groupId ?? item.provider, providerItems);
 	}
 
 	for (const provider of inventory) {
-		if (!byProvider.has(provider)) byProvider.set(provider, []);
+		const groupId = getPickerMetadata(provider)?.groupId ?? provider;
+		if (!byProvider.has(groupId)) byProvider.set(groupId, []);
 	}
 	const authenticated: ProviderModelGroup[] = [];
 	const localProviders: string[] = [];
 	const localItems: ModelItem[] = [];
 	let localStale = false;
-	for (const [provider, providerItems] of byProvider) {
-		const discovery = getDiscoveryState(provider);
-		if (LOCAL_PROVIDER_IDS.has(provider)) {
-			localProviders.push(provider);
+	for (const [groupId, providerItems] of byProvider) {
+		const providers = [
+			...new Set([
+				...providerItems.map(item => item.provider),
+				...inventory.filter(provider => (getPickerMetadata(provider)?.groupId ?? provider) === groupId),
+			]),
+		];
+		const discovery = providers.map(provider => getDiscoveryState(provider)).find(Boolean);
+		if (providers.length > 0 && providers.every(provider => LOCAL_PROVIDER_IDS.has(provider))) {
+			localProviders.push(...providers);
 			localStale ||= discovery?.status !== "ok" || discovery.stale;
 			localItems.push(...providerItems);
 			continue;
 		}
-		if (!hasAuth(provider) && !inventory.includes(provider)) continue;
+		if (!providers.some(provider => hasAuth(provider) || inventory.includes(provider))) continue;
 		sortModelsByHierarchy(providerItems, false);
+		const accessStates = providers.map(provider => getAccessState(provider)).filter(state => state !== undefined);
+		const statuses = accessStates.map(state => state.status);
+		const groupMetadata = providers.map(getPickerMetadata).find(metadata => metadata?.groupLabel);
 		authenticated.push({
-			id: provider,
-			label: getProviderDisplayName(provider),
+			id: groupId,
+			label: groupMetadata?.groupLabel ?? getProviderDisplayName(groupId),
 			classification: "authenticated",
-			discoveryStatus: !hasAuth(provider) ? "unauthenticated" : (discovery?.status ?? "idle"),
-			stale: discovery?.stale ?? true,
-			providers: [provider],
+			discoveryStatus: statuses.includes("reauth-required")
+				? "unauthenticated"
+				: providers.some(provider => getDiscoveryState(provider)?.status === "unavailable")
+					? "unavailable"
+					: (discovery?.status ?? "idle"),
+			stale:
+				accessStates.length > 0
+					? accessStates.some(state => state.catalogFreshness === "stale")
+					: providers.some(provider => getDiscoveryState(provider)?.stale ?? true),
+			providers,
 			models: providerItems,
 		});
 	}
@@ -281,8 +317,8 @@ export function buildProviderModelGroups(
 		if (normalized && !configuredRank.has(normalized)) configuredRank.set(normalized, configuredRank.size);
 	}
 	authenticated.sort((left, right) => {
-		if (left.id === currentProvider && right.id !== currentProvider) return -1;
-		if (right.id === currentProvider && left.id !== currentProvider) return 1;
+		if (left.providers.includes(currentProvider ?? "") && !right.providers.includes(currentProvider ?? "")) return -1;
+		if (right.providers.includes(currentProvider ?? "") && !left.providers.includes(currentProvider ?? "")) return 1;
 		const leftRank = configuredRank.get(left.id.toLowerCase()) ?? Number.MAX_SAFE_INTEGER;
 		const rightRank = configuredRank.get(right.id.toLowerCase()) ?? Number.MAX_SAFE_INTEGER;
 		if (leftRank !== rightRank) return leftRank - rightRank;
@@ -483,13 +519,10 @@ export class ModelSelectorComponent extends Container {
 		this.addChild(new DynamicBorder());
 		this.addChild(new Spacer(1));
 
-		// Add hint about model filtering
-		const hintText =
-			scopedModels.length > 0
-				? "Showing models from --models scope"
-				: "Only showing models from configured providers (see README for details)";
-		this.addChild(new Text(theme.fg("warning", hintText), 0, 0));
-		this.addChild(new Spacer(1));
+		if (scopedModels.length > 0) {
+			this.addChild(new Text(theme.fg("warning", "Showing models from --models scope"), 0, 0));
+			this.addChild(new Spacer(1));
+		}
 
 		// Create header container for tab bar
 		this.#headerContainer = new Container();
@@ -542,7 +575,7 @@ export class ModelSelectorComponent extends Container {
 			}
 			// Request re-render after models are loaded
 			this.#tui.requestRender();
-			void this.#refreshSelectedProvider().catch(error => {
+			void this.#refreshVisibleProviders().catch(error => {
 				this.#errorMessage = String(error);
 				this.#updateList();
 				this.#tui.requestRender();
@@ -743,18 +776,51 @@ export class ModelSelectorComponent extends Container {
 	}
 
 	#availableItems(): ModelItem[] {
-		const available = this.#modelRegistry.getAvailable();
+		const providerAllowlist = new Set(this.#settings.get("modelProviderAllowlist"));
+		const providerVisible = (provider: string) => providerAllowlist.size === 0 || providerAllowlist.has(provider);
+		const available = this.#modelRegistry
+			.getAvailable()
+			.filter(model => (this.#scopedModels.length > 0 ? true : providerVisible(model.provider)));
+		if (this.#scopedModels.length === 0) {
+			for (const model of this.#modelRegistry.getAll()) {
+				if (!providerVisible(model.provider) || available.some(candidate => modelsAreEqual(candidate, model)))
+					continue;
+				const discovery = this.#modelRegistry.getProviderDiscoveryState?.(model.provider);
+				if (
+					discovery?.stale &&
+					discovery.models.includes(model.id) &&
+					this.#modelRegistry.getProviderAccessState?.(model.provider)?.status !== "unconfigured"
+				) {
+					available.push(model);
+				}
+			}
+		}
 		const retained = [this.#currentModel, ...Object.values(this.#roles).map(role => role?.model)].filter(
 			(model): model is Model => Boolean(model),
 		);
-		const items = modelItems(available);
+		const items = modelItems(
+			available,
+			true,
+			provider => this.#modelRegistry.getProviderPickerMetadata?.(provider),
+			provider => this.#modelRegistry.getProviderAccessState?.(provider),
+		);
 		for (const model of retained) {
 			if (
-				this.#modelRegistry.getProviderInventory &&
-				!this.#modelRegistry.getProviderInventory().includes(model.provider)
+				!providerVisible(model.provider) ||
+				(this.#modelRegistry.getProviderInventory &&
+					!this.#modelRegistry.getProviderInventory().includes(model.provider))
 			)
 				continue;
-			if (!items.some(item => modelsAreEqual(item.model, model))) items.push(...modelItems([model], false));
+			if (!items.some(item => modelsAreEqual(item.model, model))) {
+				items.push(
+					...modelItems(
+						[model],
+						false,
+						provider => this.#modelRegistry.getProviderPickerMetadata?.(provider),
+						provider => this.#modelRegistry.getProviderAccessState?.(provider),
+					),
+				);
+			}
 		}
 		return items;
 	}
@@ -779,7 +845,14 @@ export class ModelSelectorComponent extends Container {
 				this.#modelRegistry.isProviderKeyless?.(provider) ||
 				this.#modelRegistry.authStorage.hasAuth(provider),
 			false,
-			this.#scopedModels.length > 0 ? [] : (this.#modelRegistry.getProviderInventory?.() ?? []),
+			this.#scopedModels.length > 0
+				? []
+				: (this.#modelRegistry.getProviderInventory?.() ?? []).filter(provider => {
+						const allowlist = this.#settings.get("modelProviderAllowlist");
+						return allowlist.length === 0 || allowlist.includes(provider);
+					}),
+			provider => this.#modelRegistry.getProviderPickerMetadata?.(provider),
+			provider => this.#modelRegistry.getProviderAccessState?.(provider),
 		);
 		this.#providers = this.#providerGroups.map(group => group.id);
 		const previousIndex = this.#providers.indexOf(previousProvider);
@@ -810,7 +883,7 @@ export class ModelSelectorComponent extends Container {
 			}
 		}
 		try {
-			await Promise.all([...providers].map(provider => this.#modelRegistry.refreshProvider(provider, "online")));
+			await this.#refreshProviders([...providers]);
 			const models = this.#availableItems();
 			this.#sortModels(models);
 			this.#allModels = models;
@@ -827,6 +900,43 @@ export class ModelSelectorComponent extends Container {
 			if (this.#refreshingProvider === activeGroup.id) this.#refreshingProvider = undefined;
 			this.#updateList();
 			this.#tui.requestRender();
+		}
+	}
+
+	async #refreshProviders(providers: readonly string[]): Promise<void> {
+		if (typeof this.#modelRegistry.refreshProviders === "function") {
+			await this.#modelRegistry.refreshProviders(providers, "online");
+			return;
+		}
+		await Promise.all(providers.map(provider => this.#modelRegistry.refreshProvider(provider, "online")));
+	}
+
+	async #refreshVisibleProviders(): Promise<void> {
+		const activeGroup = this.#providerGroups[this.#activeTabIndex];
+		if (!activeGroup || typeof this.#modelRegistry.refreshProvider !== "function") return;
+		const providers = [...new Set(this.#providerGroups.flatMap(group => group.providers))];
+		this.#refreshingProvider = activeGroup.id;
+		this.#pendingRefreshes++;
+		if (!this.#spinnerTimer) {
+			this.#spinnerTimer = setInterval(() => {
+				this.#spinnerFrame++;
+				this.#tui.requestRender();
+			}, 80);
+			this.#spinnerTimer.unref();
+		}
+		this.#updateList();
+		try {
+			await this.#refreshProviders(providers);
+			const models = this.#availableItems();
+			this.#sortModels(models);
+			this.#allModels = models;
+			this.#buildProviderTabs();
+			this.#updateTabBar();
+			this.#applyTabFilter();
+		} finally {
+			if (--this.#pendingRefreshes === 0) this.#stopSpinner();
+			if (this.#refreshingProvider === activeGroup.id) this.#refreshingProvider = undefined;
+			this.#updateList();
 		}
 	}
 
@@ -981,6 +1091,8 @@ export class ModelSelectorComponent extends Container {
 				return "  Provider requires authentication before models can be discovered.";
 			case "idle":
 				return "  Provider has not been refreshed yet.";
+			case "checking":
+				return "  Checking provider availability…";
 			case "ok":
 				return "  Provider reported no models.";
 		}
@@ -1010,15 +1122,12 @@ export class ModelSelectorComponent extends Container {
 			if (!item) continue;
 			const canonicalItem = isCanonicalTab ? (item as CanonicalModelItem) : undefined;
 			const providerItem = isCanonicalTab ? undefined : (item as ModelItem);
+			const sectionLabel = providerItem?.sectionLabel ?? getModelPublisher(item.model);
 			const group = showProvider
-				? [
-						getProviderDisplayName(providerItem?.provider ?? ""),
-						getModelPublisher(item.model),
-						getModelFamily(item.model),
-					]
+				? [getProviderDisplayName(providerItem?.provider ?? ""), sectionLabel, getModelFamily(item.model)]
 						.filter(Boolean)
 						.join(" › ")
-				: [getModelPublisher(item.model), getModelFamily(item.model)].filter(Boolean).join(" › ");
+				: [sectionLabel, getModelFamily(item.model)].filter(Boolean).join(" › ");
 			if (group && group !== previousGroup) {
 				if (previousGroup) this.#listContainer.addChild(new Spacer(1));
 				this.#listContainer.addChild(new Text(theme.fg("muted", `  ${group}`), 0, 0));
@@ -1050,6 +1159,7 @@ export class ModelSelectorComponent extends Container {
 			const badgeText = roleBadgeTokens.length > 0 ? ` ${roleBadgeTokens.join(" ")}` : "";
 
 			let line = "";
+			const disabled = !isCanonicalTab && providerItem ? this.#isItemDisabled(providerItem) : false;
 			if (isSelected) {
 				const prefix = theme.fg("accent", `${theme.nav.cursor} `);
 				if (isCanonicalTab) {
@@ -1057,7 +1167,7 @@ export class ModelSelectorComponent extends Container {
 					const backing = theme.fg("dim", ` -> ${item.model.provider}/${item.model.id}`);
 					line = `${prefix}${theme.fg("accent", item.id)}${variants}${backing}${badgeText}`;
 				} else {
-					line = `${prefix}${theme.fg("accent", getModelDisplayName(item.model))} ${theme.fg("dim", `[${item.selector}]`)}${badgeText}`;
+					line = `${prefix}${theme.fg(disabled ? "dim" : "accent", getModelDisplayName(item.model))} ${theme.fg("dim", `[${item.selector}]`)}${disabled ? theme.fg("warning", " unavailable") : badgeText}`;
 				}
 			} else {
 				const prefix = "  ";
@@ -1066,7 +1176,7 @@ export class ModelSelectorComponent extends Container {
 					const backing = theme.fg("dim", ` -> ${item.model.provider}/${item.model.id}`);
 					line = `${prefix}${item.id}${variants}${backing}${badgeText}`;
 				} else {
-					line = `${prefix}${getModelDisplayName(item.model)} ${theme.fg("dim", `[${item.selector}]`)}${badgeText}`;
+					line = `${prefix}${theme.fg(disabled ? "dim" : "text", getModelDisplayName(item.model))} ${theme.fg("dim", `[${item.selector}]`)}${disabled ? theme.fg("warning", " unavailable") : badgeText}`;
 				}
 			}
 
@@ -1129,9 +1239,14 @@ export class ModelSelectorComponent extends Container {
 			: this.#filteredModels[this.#selectedIndex];
 	}
 
+	#isItemDisabled(item: ModelItem | CanonicalModelItem): boolean {
+		if (item.kind === "canonical" || this.#scopedModels.length > 0) return false;
+		return this.#modelRegistry.getProviderAccessState?.(item.provider)?.selectable === false;
+	}
+
 	#openMenu(): void {
 		this.#menuItem = this.#getSelectedItem();
-		if (!this.#menuItem) return;
+		if (!this.#menuItem || this.#isItemDisabled(this.#menuItem)) return;
 		this.#isMenuOpen = true;
 		this.#menuScope = "conversation";
 		this.#menuStep = "scope";

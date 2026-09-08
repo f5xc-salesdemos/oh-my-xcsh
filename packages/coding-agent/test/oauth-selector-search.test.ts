@@ -9,14 +9,18 @@ beforeAll(() => {
 	initTheme();
 });
 
-function createSelector(mode: "login" | "logout" = "login", authenticated = false) {
+function createSelector(
+	mode: "login" | "logout" = "login",
+	authenticated = false,
+	options?: ConstructorParameters<typeof OAuthSelectorComponent>[4],
+) {
 	const onSelect = vi.fn();
 	const onCancel = vi.fn();
 	const authStorage = {
 		hasAuth: (provider: string) =>
 			authenticated && (provider === "google-antigravity" || provider === "openai-codex"),
 	} as unknown as AuthStorage;
-	const selector = new OAuthSelectorComponent(mode, authStorage, onSelect, onCancel);
+	const selector = new OAuthSelectorComponent(mode, authStorage, onSelect, onCancel, options);
 	return { selector, onSelect, onCancel };
 }
 
@@ -34,7 +38,41 @@ describe("OAuthSelectorComponent provider search", () => {
 		const rendered = renderText(selector);
 		expect(rendered).toContain("ChatGPT Plus/Pro (Codex Subscription)");
 		expect(rendered).not.toContain("ChatGPT Plus/Pro (Browser callback)");
-		expect(rendered.match(/logged in/g)).toHaveLength(1);
+		expect(rendered.match(/credential detected/g)).toHaveLength(1);
+	});
+
+	it("renders honest normalized access and picker-scope labels", () => {
+		const selector = createSelector("login", false, {
+			getAccessState: provider => ({
+				provider,
+				credentialSource: provider === "vllm" ? "keyless" : "stored-oauth",
+				status: provider === "anthropic" ? "reauth-required" : "configured-unverified",
+				catalogFreshness: "none",
+				selectable: false,
+			}),
+			isExcluded: provider => provider === "anthropic",
+		}).selector;
+		for (const character of "anthropic") selector.handleInput(character);
+		const rendered = renderText(selector);
+		expect(rendered).toContain("re-authentication required");
+		expect(rendered).toContain("excluded from picker");
+		expect(rendered).not.toContain("logged in");
+	});
+
+	it("identifies keyless providers without calling them logged in", () => {
+		const selector = createSelector("login", false, {
+			getAccessState: provider => ({
+				provider,
+				credentialSource: provider === "vllm" ? "keyless" : undefined,
+				status: provider === "vllm" ? "configured-unverified" : "unconfigured",
+				catalogFreshness: "none",
+				selectable: provider === "vllm",
+			}),
+		}).selector;
+		for (const character of "vllm") selector.handleInput(character);
+		const rendered = renderText(selector);
+		expect(rendered).toContain("keyless configured");
+		expect(rendered).not.toContain("logged in");
 	});
 
 	it("renders a bounded provider viewport with position and input guidance", () => {

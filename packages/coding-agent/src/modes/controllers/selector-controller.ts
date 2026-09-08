@@ -634,6 +634,29 @@ export class SelectorController {
 		return promise;
 	}
 
+	async #showLiteLLMPickerScopeSelector(): Promise<boolean | undefined> {
+		const { promise, resolve } = Promise.withResolvers<boolean | undefined>();
+		this.showSelector(done => {
+			const selector = new HookSelectorComponent(
+				"Restrict the normal model picker to LiteLLM?",
+				["Yes — show only LiteLLM", "No — keep all configured providers"],
+				option => {
+					done();
+					resolve(option.startsWith("Yes"));
+					this.ctx.ui.requestRender();
+				},
+				() => {
+					done();
+					resolve(undefined);
+					this.ctx.ui.requestRender();
+				},
+				{ maxVisible: 2, helpText: "up/down navigate  enter select  esc keep current scope" },
+			);
+			return { component: selector, focus: selector };
+		});
+		return promise;
+	}
+
 	async #showVllmLoginModelSelector(choices: readonly LoginModelChoice[]): Promise<LoginModelChoice | null> {
 		const { promise, resolve } = Promise.withResolvers<LoginModelChoice | null>();
 		this.showSelector(done => {
@@ -1136,6 +1159,7 @@ export class SelectorController {
 		const modelsPath = path.join(getAgentDir(), "models.yml");
 		const configPath = path.join(path.dirname(modelsPath), "config.yml");
 		let defaults = readLiteLLMConfig(modelsPath);
+		let restrictPicker: boolean | undefined;
 
 		try {
 			const flowResult = await runLiteLLMLoginFlow({
@@ -1202,13 +1226,18 @@ export class SelectorController {
 					}
 					return probe;
 				},
-				selectModel: choices => this.#showLiteLLMLoginModelSelector(choices),
+				selectModel: async choices => {
+					const choice = await this.#showLiteLLMLoginModelSelector(choices);
+					if (choice) restrictPicker = await this.#showLiteLLMPickerScopeSelector();
+					return choice;
+				},
 				commit: input =>
 					commitLiteLLMLogin({
 						...input,
 						modelsPath,
 						configPath,
 						session: this.ctx.session,
+						restrictPicker,
 					}),
 				recover: request => this.#showLoginRecovery(request),
 			});
@@ -1707,12 +1736,14 @@ export class SelectorController {
 						this.ctx.ui.requestRender();
 					},
 					{
-						validateAuth: async (selectedProviderId: string) => {
-							const apiKey = await this.ctx.session.modelRegistry.getApiKeyForProvider(
-								selectedProviderId,
-								this.ctx.session.sessionId,
-							);
-							return !!apiKey;
+						getAccessState: provider => this.ctx.session.modelRegistry.getProviderAccessState?.(provider),
+						validateAccess: async selectedProviderId => {
+							await this.ctx.session.modelRegistry.refreshProvider(selectedProviderId, "online");
+							return this.ctx.session.modelRegistry.getProviderAccessState?.(selectedProviderId);
+						},
+						isExcluded: provider => {
+							const allowlist = this.ctx.settings?.get?.("modelProviderAllowlist") ?? [];
+							return allowlist.length > 0 && !allowlist.includes(provider);
 						},
 						requestRender: () => {
 							this.ctx.ui.requestRender();

@@ -276,6 +276,10 @@ export const SETTINGS_SCHEMA = {
 
 	modelProviderOrder: { type: "array", default: EMPTY_STRING_ARRAY },
 
+	// Restricts only normal /model picker visibility. Explicit CLI model scopes
+	// continue to resolve against the complete configured registry.
+	modelProviderAllowlist: { type: "array", default: EMPTY_STRING_ARRAY },
+
 	cycleOrder: { type: "array", default: DEFAULT_CYCLE_ORDER },
 
 	// ────────────────────────────────────────────────────────────────────────
