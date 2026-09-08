@@ -22,7 +22,8 @@ Connection and framing failures surface as integration diagnostics. The client m
 
 ## What lifecycle state does xcsh publish?
 
-XCSH publishes native turn phases rather than inferring completion from terminal idleness or process exit. With Herdr protocol 20 and the advertised `agent_turn_journal` capability, a tracked execution publishes a persisted session/turn identity and a bounded semantic result to Herdr's durable journal. The existing 80-character metadata preview remains display-only and is never completion evidence. Commentary, prompt content, tool data, and failed or cancelled partial output are excluded.
+XCSH publishes native turn phases rather than inferring completion from terminal idleness or process exit. With Herdr protocol 20 and the advertised `agent_turn_journal` capability, a tracked execution publishes a persisted session/turn identity and a bounded semantic result to Herdr's durable journal. The existing 80-character metadata preview remains display-only and is never completion evidence.
+Commentary, prompt content, tool data, and failed or cancelled partial output are excluded.
 
 Session shutdown releases pane authority. It does not convert an unfinished turn into a successful completion.
 

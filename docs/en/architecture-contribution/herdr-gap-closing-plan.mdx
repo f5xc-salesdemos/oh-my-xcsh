@@ -8,7 +8,7 @@ sidebar:
 
 **Status: PLAN COMPLETE; XCSH FEATURE INCOMPLETE.** This is an implementation and acceptance plan, not evidence that the feature is implemented, installed, or accepted. Every required work package and closure gate remains open until its stated evidence is attached. Deferring a required item leaves the feature incomplete.
 
-### Current delivery checklist
+## Current delivery checklist
 
 - [x] Plan reviewed and XCSH issue [#3768](https://github.com/f5-sales-demo/xcsh/issues/3768) created.
 - [x] XCSH protocol 19–20 negotiation, capability gate, persisted turn UUID, semantic producer, and focused unit tests implemented in the review worktree.
@@ -42,9 +42,11 @@ Three planes remain separate:
 2. **XCSH semantic turns** own start, progress, waiting for input/approval, successful completion with bounded result, failure, cancellation, interruption, and continuation/fork identity.
 3. **Control Manager acceptance** owns durable task state, required-child aggregation, replay, supersession, delivery acknowledgment, and correlation of a visible response with the accepted result.
 
-Canonical identity is `(producer, session_id, turn_id, generation)`. The native persisted XCSH session supplies `session_id`. XCSH creates and persists `turn_id` before the first event and retains it across reconnect. `generation` distinguishes deliberate continuation/retry that supersedes older work. Pane/execution IDs are provenance, not semantic identity. Manager task association must be validated against server-owned pane/execution context; a free-form client task ID is not trusted alone.
+Canonical identity is `(producer, session_id, turn_id, generation)`. The native persisted XCSH session supplies `session_id`. XCSH creates and persists `turn_id` before the first event and retains it across reconnect. `generation` distinguishes deliberate continuation/retry that supersedes older work. Pane/execution IDs are provenance, not semantic identity.
+Manager task association must be validated against server-owned pane/execution context; a free-form client task ID is not trusted alone.
 
-Events have a monotonic sequence/revision, state, timestamp, and optional bounded safe payload. Exact replay with the same identity, revision, and digest is idempotent; changed content at the same revision conflicts; older revisions cannot regress state. Terminal state is immutable, while a new generation may explicitly supersede it. Restart replays persisted events; unrecoverable active work becomes `interrupted`/`lost`, never `completed`.
+Events have a monotonic sequence/revision, state, timestamp, and optional bounded safe payload. Exact replay with the same identity, revision, and digest is idempotent; changed content at the same revision conflicts; older revisions cannot regress state. Terminal state is immutable, while a new generation may explicitly supersede it.
+Restart replays persisted events; unrecoverable active work becomes `interrupted`/`lost`, never `completed`.
 
 ## What do statuses mean?
 
@@ -66,12 +68,16 @@ UI surfaces show process state, semantic turn state, and feature acceptance inde
 1. **WP0 — Governed baselines and issue records (each project).** Preserve this worktree, base future implementation on current authoritative branches, and create issue-ready owner records from this plan. Record revisions, artifact identity, schemas, and acceptance criteria. Gate: clean isolated worktrees and approved issue links.
 2. **WP1 — Capability/protocol negotiation (XCSH, Herdr review).** Replace exact protocol 19 with an explicit supported range/set and capability discovery. Support 20 only after schema review; reject unknown versions visibly. Gate semantic calls on capability, not guesses. Dependency: WP0. Tests: supported 19/20 fixtures, old/future/malformed responses, visible failure.
 3. **WP2 — Durable turn identity (XCSH).** Persist a stable turn ID before work; retain it across reconnect/resume; allocate a new turn for a new prompt and distinct lineage for fork; define generations. Dependency: WP0. Tests: persistence, resume, fork, pre-event crash, collision.
-4. **WP3 — Durable semantic-turn contract (Herdr).** Add a supported report/query/wait API and journal for native agent turns. Persist identity, revision, state, bounded result/reason, digest, timestamps, and server-resolved provenance. Enforce idempotency, conflicts, monotonicity, terminal immutability, redaction, retention, replay, and restart loss. Dependencies: WP1/WP2 contract. Gate: Herdr tests and published schema/capability.
+4. **WP3 — Durable semantic-turn contract (Herdr).** Add a supported report/query/wait API and journal for native agent turns. Persist identity, revision, state, bounded result/reason, digest, timestamps, and server-resolved provenance. Enforce idempotency, conflicts, monotonicity, terminal immutability, redaction, retention, replay, and restart loss. Dependencies: WP1/WP2 contract.
+   Gate: Herdr tests and published schema/capability.
 5. **WP4 — Complete producer (XCSH).** Wire native lifecycle settlement—not rendering, idle, or shutdown—to WP3. Emit every semantic state with persisted identity. Keep short metadata as presentation only. Surface permanent delivery failure and use bounded ordered retry for transient failure. Dependencies: WP1–WP3. Gate: lifecycle/contract tests including forbidden false-success paths.
 6. **WP5 — Continuation/reconciliation (XCSH and Herdr).** Prove resume by path/ID, fork lineage, continuation after pane/process loss, output-drain ordering, and terminal reconciliation. Bind turns to admitted execution without making exit semantic. Dependencies: WP2–WP4. Gate: cross-process tests and installed provenance for the resume allow-list.
-7. **WP6 — Native XCSH worker and aggregate gates (Control Manager).** Add `xcsh` work kind through native Herdr execution; consume semantic revisions; persist accepted revision/digest; preserve all states; route cancel; continue the same session. Reuse durable journal/outbox/inbox and response correlation. Add required child/checklist gates so missing or deferred requirements keep parents incomplete. Do not require a wrapper/control-report workaround. Dependencies: WP3–WP5. Gate: mapping, replay, supersession, conflict, acknowledgment, and aggregation tests.
+7. **WP6 — Native XCSH worker and aggregate gates (Control Manager).** Add `xcsh` work kind through native Herdr execution; consume semantic revisions; persist accepted revision/digest; preserve all states; route cancel; continue the same session. Reuse durable journal/outbox/inbox and response correlation. Add required child/checklist gates so missing or deferred requirements keep parents incomplete.
+   Do not require a wrapper/control-report workaround. Dependencies: WP3–WP5.
+   Gate: mapping, replay, supersession, conflict, acknowledgment, and aggregation tests.
 8. **WP7 — Reproducible staged integration (all owners).** Pin source SHAs, produce versioned artifacts/checksums/schemas, then test in an isolated non-default Herdr environment and disposable Manager database. Dependencies: WP1–WP6. Gate: full matrix below with scrubbed retained evidence.
-9. **WP8 — Controlled activation/live acceptance (operations).** In an authorized maintenance window, verify no active work, install versioned artifacts, verify SHA/version/protocol/capabilities, restart only intended services, and run bounded live UAT. Roll back recorded binaries/config/data snapshot on health, replay, or mapping failure. Dependency: WP7. Gate: deployed identity plus live acknowledgment. No activation occurred here.
+9. **WP8 — Controlled activation/live acceptance (operations).** In an authorized maintenance window, verify no active work, install versioned artifacts, verify SHA/version/protocol/capabilities, restart only intended services, and run bounded live UAT. Roll back recorded binaries/config/data snapshot on health, replay, or mapping failure. Dependency: WP7.
+   Gate: deployed identity plus live acknowledgment. No activation occurred here.
 
 ## What end-to-end tests are required?
 
