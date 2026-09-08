@@ -17,7 +17,14 @@ describe("Routing Presets (R03)", () => {
 			},
 		});
 		expect(BUILTIN_ROUTING_PRESETS["litellm/openai"]).toBeDefined();
-		expect(BUILTIN_ROUTING_PRESETS["litellm/anthropic"]).toBeDefined();
+		expect(BUILTIN_ROUTING_PRESETS["litellm/openai"]).toMatchObject({
+			provider: "litellm",
+			tiers: { utility: "gpt-5.6-luna", balanced: "gpt-5.6-terra", frontier: "gpt-5.6-sol" },
+		});
+		expect(BUILTIN_ROUTING_PRESETS["litellm/anthropic"]).toMatchObject({
+			provider: "litellm",
+			tiers: { utility: "claude-haiku-4-5", balanced: "claude-sonnet-5", frontier: "claude-opus-5" },
+		});
 		expect(BUILTIN_ROUTING_PRESETS["openai-codex/gpt-5.6"]).toMatchObject({
 			provider: "openai-codex",
 			tiers: { utility: "gpt-5.6-luna", balanced: "gpt-5.6-terra", frontier: "gpt-5.6-sol" },
@@ -32,7 +39,7 @@ describe("Routing Presets (R03)", () => {
 
 		for (const pool of Object.values(BUILTIN_ROUTING_PRESETS)) {
 			// OAuth subscription models are entitlement-discovered and intentionally need not exist in the bundle.
-			if (pool.provider === "openai-codex") continue;
+			if (pool.provider === "openai-codex" || pool.provider === "litellm") continue;
 			const p = pool.provider ? `${pool.provider}/` : "";
 			expect(available).toContain(`${p}${pool.tiers.utility}`);
 			expect(available).toContain(`${p}${pool.tiers.balanced}`);
@@ -49,13 +56,13 @@ describe("Routing Presets (R03)", () => {
 
 		const litellmOpenaiPool = resolveModelPool("litellm/openai", {});
 		expect(litellmOpenaiPool).toBeDefined();
-		expect(litellmOpenaiPool?.tiers.utility).toBe("gpt-5.4-mini");
-		expect(litellmOpenaiPool?.tiers.balanced).toBe("gpt-5.4");
+		expect(litellmOpenaiPool?.tiers.utility).toBe("gpt-5.6-luna");
+		expect(litellmOpenaiPool?.tiers.balanced).toBe("gpt-5.6-terra");
 		expect(litellmOpenaiPool?.tiers.frontier).toBe("gpt-5.6-sol");
 	});
 
 	it("should NOT cross provider families when anchor model has explicit provider prefix", () => {
-		const litellmClaudePool = resolveModelPool("litellm/claude-3-5-sonnet-20241022", {});
+		const litellmClaudePool = resolveModelPool("litellm/claude-sonnet-5", {});
 		expect(litellmClaudePool).toBeDefined();
 		expect(litellmClaudePool?.id).toBe("litellm/anthropic");
 		expect(litellmClaudePool?.provider).toBe("litellm");
