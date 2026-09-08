@@ -175,213 +175,96 @@ impl builtins::Command for SetCommand {
 
 	type Error = brush_core::Error;
 
-	#[allow(clippy::useless_let_if_seq)]
-	async fn execute(
+	fn execute(
 		&self,
 		context: brush_core::ExecutionContext<'_>,
-	) -> Result<ExecutionResult, Self::Error> {
-		let mut result = ExecutionResult::success();
+	) -> impl Future<Output = Result<ExecutionResult, Self::Error>> {
+		futures::future::lazy(move |_| {
+			let mut result = ExecutionResult::success();
 
-		let mut saw_option = false;
+			let mut saw_option = self.apply_short_options(&mut context.shell.options);
 
-		if let Some(value) = self.print_commands_and_arguments.to_bool() {
-			context.shell.options.print_commands_and_arguments = value;
-			saw_option = true;
-		}
+			let mut named_options: HashMap<String, bool> = HashMap::new();
+			if let Some(option_names) = &self.set_option.disable {
+				saw_option = true;
+				if option_names.is_empty() {
+					for option in
+						brush_core::namedoptions::options(brush_core::namedoptions::ShellOptionKind::SetO)
+							.iter()
+							.sorted_by_key(|option| option.name)
+					{
+						let option_value = option.definition.get(&context.shell.options);
+						let option_value_str = if option_value { "-o" } else { "+o" };
+						writeln!(context.stdout(), "set {option_value_str} {}", option.name)?;
+					}
+				} else {
+					for option_name in option_names {
+						named_options.insert(option_name.to_owned(), false);
+					}
+				}
+			}
+			if let Some(option_names) = &self.set_option.enable {
+				saw_option = true;
+				if option_names.is_empty() {
+					for option in
+						brush_core::namedoptions::options(brush_core::namedoptions::ShellOptionKind::SetO)
+							.iter()
+							.sorted_by_key(|option| option.name)
+					{
+						let option_value = option.definition.get(&context.shell.options);
+						let option_value_str = if option_value { "on" } else { "off" };
+						writeln!(context.stdout(), "{:15}\t{option_value_str}", option.name)?;
+					}
+				} else {
+					for option_name in option_names {
+						named_options.insert(option_name.to_owned(), true);
+					}
+				}
+			}
 
-		if let Some(value) = self.export_variables_on_modification.to_bool() {
-			context.shell.options.export_variables_on_modification = value;
-			saw_option = true;
-		}
-
-		if let Some(value) = self.notify_job_termination_immediately.to_bool() {
-			context.shell.options.notify_job_termination_immediately = value;
-			saw_option = true;
-		}
-
-		if let Some(value) = self.exit_on_nonzero_command_exit.to_bool() {
-			context.shell.options.exit_on_nonzero_command_exit = value;
-			saw_option = true;
-		}
-
-		if let Some(value) = self.disable_filename_globbing.to_bool() {
-			context.shell.options.disable_filename_globbing = value;
-			saw_option = true;
-		}
-
-		if let Some(value) = self.remember_command_locations.to_bool() {
-			context.shell.options.remember_command_locations = value;
-			saw_option = true;
-		}
-
-		if let Some(value) = self.place_all_assignment_args_in_command_env.to_bool() {
-			context
-				.shell
-				.options
-				.place_all_assignment_args_in_command_env = value;
-			saw_option = true;
-		}
-
-		if let Some(value) = self.enable_job_control.to_bool() {
-			context.shell.options.enable_job_control = value;
-			saw_option = true;
-		}
-
-		if let Some(value) = self.do_not_execute_commands.to_bool() {
-			context.shell.options.do_not_execute_commands = value;
-			saw_option = true;
-		}
-
-		if let Some(value) = self.real_effective_uid_mismatch.to_bool() {
-			context.shell.options.real_effective_uid_mismatch = value;
-			saw_option = true;
-		}
-
-		if let Some(value) = self.exit_after_one_command.to_bool() {
-			context.shell.options.exit_after_one_command = value;
-			saw_option = true;
-		}
-
-		if let Some(value) = self.treat_unset_variables_as_error.to_bool() {
-			context.shell.options.treat_unset_variables_as_error = value;
-			saw_option = true;
-		}
-
-		if let Some(value) = self.print_shell_input_lines.to_bool() {
-			context.shell.options.print_shell_input_lines = value;
-			saw_option = true;
-		}
-
-		if let Some(value) = self.print_commands_and_arguments.to_bool() {
-			context.shell.options.print_commands_and_arguments = value;
-			saw_option = true;
-		}
-
-		if let Some(value) = self.perform_brace_expansion.to_bool() {
-			context.shell.options.perform_brace_expansion = value;
-			saw_option = true;
-		}
-
-		if let Some(value) = self
-			.disallow_overwriting_regular_files_via_output_redirection
-			.to_bool()
-		{
-			context
-				.shell
-				.options
-				.disallow_overwriting_regular_files_via_output_redirection = value;
-			saw_option = true;
-		}
-
-		if let Some(value) = self.shell_functions_inherit_err_trap.to_bool() {
-			context.shell.options.shell_functions_inherit_err_trap = value;
-			saw_option = true;
-		}
-
-		if let Some(value) = self.enable_bang_style_history_substitution.to_bool() {
-			context.shell.options.enable_bang_style_history_substitution = value;
-			saw_option = true;
-		}
-
-		if let Some(value) = self.do_not_resolve_symlinks_when_changing_dir.to_bool() {
-			context
-				.shell
-				.options
-				.do_not_resolve_symlinks_when_changing_dir = value;
-			saw_option = true;
-		}
-
-		if let Some(value) = self
-			.shell_functions_inherit_debug_and_return_traps
-			.to_bool()
-		{
-			context
-				.shell
-				.options
-				.shell_functions_inherit_debug_and_return_traps = value;
-			saw_option = true;
-		}
-
-		let mut named_options: HashMap<String, bool> = HashMap::new();
-		if let Some(option_names) = &self.set_option.disable {
-			saw_option = true;
-			if option_names.is_empty() {
-				for option in
+			for (option_name, value) in named_options {
+				if let Some(option_def) =
 					brush_core::namedoptions::options(brush_core::namedoptions::ShellOptionKind::SetO)
-						.iter()
-						.sorted_by_key(|option| option.name)
+						.get(option_name.as_str())
 				{
-					let option_value = option.definition.get(&context.shell.options);
-					let option_value_str = if option_value { "-o" } else { "+o" };
-					writeln!(context.stdout(), "set {option_value_str} {}", option.name)?;
-				}
-			} else {
-				for option_name in option_names {
-					named_options.insert(option_name.to_owned(), false);
+					option_def.set(&mut context.shell.options, value);
+				} else {
+					result = ExecutionExitCode::InvalidUsage.into();
 				}
 			}
-		}
-		if let Some(option_names) = &self.set_option.enable {
-			saw_option = true;
-			if option_names.is_empty() {
-				for option in
-					brush_core::namedoptions::options(brush_core::namedoptions::ShellOptionKind::SetO)
-						.iter()
-						.sorted_by_key(|option| option.name)
-				{
-					let option_value = option.definition.get(&context.shell.options);
-					let option_value_str = if option_value { "on" } else { "off" };
-					writeln!(context.stdout(), "{:15}\t{option_value_str}", option.name)?;
-				}
-			} else {
-				for option_name in option_names {
-					named_options.insert(option_name.to_owned(), true);
-				}
-			}
-		}
 
-		for (option_name, value) in named_options {
-			if let Some(option_def) =
-				brush_core::namedoptions::options(brush_core::namedoptions::ShellOptionKind::SetO)
-					.get(option_name.as_str())
-			{
-				option_def.set(&mut context.shell.options, value);
-			} else {
-				result = ExecutionExitCode::InvalidUsage.into();
-			}
-		}
-
-		let skip = match self.positional_args.first() {
-			Some(x) if x == "-" => {
-				if self.positional_args.len() > 1 {
+			let skip = match self.positional_args.first() {
+				Some(x) if x == "-" => {
+					if self.positional_args.len() > 1 {
+						context.shell.positional_parameters.clear();
+					}
+					1
+				},
+				Some(x) if x == "--" => {
 					context.shell.positional_parameters.clear();
-				}
-				1
-			},
-			Some(x) if x == "--" => {
-				context.shell.positional_parameters.clear();
-				1
-			},
-			Some(_) => {
-				context.shell.positional_parameters.clear();
-				0
-			},
-			None => 0,
-		};
+					1
+				},
+				Some(_) => {
+					context.shell.positional_parameters.clear();
+					0
+				},
+				None => 0,
+			};
 
-		for arg in self.positional_args.iter().skip(skip) {
-			context.shell.positional_parameters.push(arg.to_owned());
-		}
+			for arg in self.positional_args.iter().skip(skip) {
+				context.shell.positional_parameters.push(arg.to_owned());
+			}
 
-		saw_option = saw_option || !self.positional_args.is_empty();
+			saw_option = saw_option || !self.positional_args.is_empty();
 
-		// If we *still* haven't seen any options, then we need to display all variables and
-		// functions.
-		if !saw_option {
-			display_all(&context)?;
-		}
+			// If we *still* haven't seen any options, then we need to display all variables and
+			// functions.
+			if !saw_option {
+				display_all(&context)?;
+			}
 
-		Ok(result)
+			Ok(result)
+		})
 	}
 }
 
@@ -416,4 +299,68 @@ fn display_all(context: &brush_core::ExecutionContext<'_>) -> Result<(), brush_c
 	}
 
 	Ok(())
+}
+
+impl SetCommand {
+	fn apply_short_options(&self, options: &mut brush_core::options::RuntimeOptions) -> bool {
+		let mut saw_option = false;
+		for (value, target) in [
+			(self.print_commands_and_arguments.to_bool(), &mut options.print_commands_and_arguments),
+			(
+				self.export_variables_on_modification.to_bool(),
+				&mut options.export_variables_on_modification,
+			),
+			(
+				self.notify_job_termination_immediately.to_bool(),
+				&mut options.notify_job_termination_immediately,
+			),
+			(self.exit_on_nonzero_command_exit.to_bool(), &mut options.exit_on_nonzero_command_exit),
+			(self.disable_filename_globbing.to_bool(), &mut options.disable_filename_globbing),
+			(self.remember_command_locations.to_bool(), &mut options.remember_command_locations),
+			(
+				self.place_all_assignment_args_in_command_env.to_bool(),
+				&mut options.place_all_assignment_args_in_command_env,
+			),
+			(self.enable_job_control.to_bool(), &mut options.enable_job_control),
+			(self.do_not_execute_commands.to_bool(), &mut options.do_not_execute_commands),
+			(self.real_effective_uid_mismatch.to_bool(), &mut options.real_effective_uid_mismatch),
+			(self.exit_after_one_command.to_bool(), &mut options.exit_after_one_command),
+			(
+				self.treat_unset_variables_as_error.to_bool(),
+				&mut options.treat_unset_variables_as_error,
+			),
+			(self.print_shell_input_lines.to_bool(), &mut options.print_shell_input_lines),
+			(self.perform_brace_expansion.to_bool(), &mut options.perform_brace_expansion),
+			(
+				self
+					.disallow_overwriting_regular_files_via_output_redirection
+					.to_bool(),
+				&mut options.disallow_overwriting_regular_files_via_output_redirection,
+			),
+			(
+				self.shell_functions_inherit_err_trap.to_bool(),
+				&mut options.shell_functions_inherit_err_trap,
+			),
+			(
+				self.enable_bang_style_history_substitution.to_bool(),
+				&mut options.enable_bang_style_history_substitution,
+			),
+			(
+				self.do_not_resolve_symlinks_when_changing_dir.to_bool(),
+				&mut options.do_not_resolve_symlinks_when_changing_dir,
+			),
+			(
+				self
+					.shell_functions_inherit_debug_and_return_traps
+					.to_bool(),
+				&mut options.shell_functions_inherit_debug_and_return_traps,
+			),
+		] {
+			if let Some(value) = value {
+				*target = value;
+				saw_option = true;
+			}
+		}
+		saw_option
+	}
 }

@@ -1,16 +1,21 @@
 import { describe, expect, it } from "bun:test";
+import { Socket } from "node:net";
 import * as os from "node:os";
-import { connect } from "bun";
 import { startServer } from "../src/server";
 
 async function tcpConnects(hostname: string, port: number): Promise<boolean> {
-	try {
-		const socket = await connect({ hostname, port, socket: { data() {}, open() {}, close() {}, error() {} } });
-		socket.end();
-		return true;
-	} catch {
-		return false;
-	}
+	return new Promise(resolve => {
+		const socket = new Socket();
+		const finish = (connected: boolean) => {
+			socket.destroy();
+			resolve(connected);
+		};
+		socket.setTimeout(750);
+		socket.once("connect", () => finish(true));
+		socket.once("error", () => finish(false));
+		socket.once("timeout", () => finish(false));
+		socket.connect({ host: hostname, port });
+	});
 }
 
 describe("stats dashboard network boundary", () => {

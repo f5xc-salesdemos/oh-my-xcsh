@@ -362,7 +362,7 @@ async fn should_try_spawn_pipeline_as_job(
 async fn try_spawn_pipeline_as_job(
 	pipeline: &ast::Pipeline,
 	command_line: String,
-	shell: &mut Shell,
+	shell: &Shell,
 	params: &ExecutionParameters,
 ) -> Result<Option<jobs::Job>, error::Error> {
 	let mut subshell = shell.clone();
@@ -386,7 +386,7 @@ async fn try_spawn_pipeline_as_job(
 
 fn spawn_ao_list_in_task(
 	ao_list: &ast::AndOrList,
-	shell: &mut Shell,
+	shell: &Shell,
 	params: &ExecutionParameters,
 ) -> jobs::Job {
 	// Clone the inputs.
@@ -755,7 +755,7 @@ impl Execute for ast::ForClauseCommand {
 						.await?;
 				} else {
 					shell
-						.trace_command(params, std::format!("for {}", self.variable_name,))
+						.trace_command(params, std::format!("for {}", self.variable_name))
 						.await?;
 				}
 			}
@@ -800,7 +800,7 @@ impl Execute for ast::CaseClauseCommand {
 		// switched on, but that's not it.
 		if shell.options.print_commands_and_arguments {
 			shell
-				.trace_command(params, std::format!("case {} in", &self.value))
+				.trace_command(params, std::format!("case {} in", self.value))
 				.await?;
 		}
 
@@ -1038,6 +1038,24 @@ impl Execute for ast::FunctionDefinition {
 	}
 }
 
+fn expand_command_alias(shell: &Shell, cmd_name: &str, next_args: &mut Vec<String>) {
+	if let Some(alias_value) = shell.aliases.get(cmd_name) {
+		//
+		// TODO(#57): This is a total hack; aliases are supposed to be
+		// handled much earlier in the process.
+		//
+		let mut alias_pieces: Vec<_> = alias_value
+			.split_ascii_whitespace()
+			.map(|i| i.to_owned())
+			.collect();
+
+		next_args.remove(0);
+		alias_pieces.append(next_args);
+
+		*next_args = alias_pieces;
+	}
+}
+
 #[async_trait::async_trait]
 
 impl ExecuteInPipeline for ast::SimpleCommand {
@@ -1113,21 +1131,8 @@ impl ExecuteInPipeline for ast::SimpleCommand {
 
 					if args.is_empty() {
 						if let Some(cmd_name) = next_args.first() {
-							if let Some(alias_value) = context.shell.aliases.get(cmd_name.as_str()) {
-								//
-								// TODO(#57): This is a total hack; aliases are supposed to be
-								// handled much earlier in the process.
-								//
-								let mut alias_pieces: Vec<_> = alias_value
-									.split_ascii_whitespace()
-									.map(|i| i.to_owned())
-									.collect();
-
-								next_args.remove(0);
-								alias_pieces.append(&mut next_args);
-
-								next_args = alias_pieces;
-							}
+							let cmd_name = cmd_name.clone();
+							expand_command_alias(context.shell, &cmd_name, &mut next_args);
 
 							let first_arg = next_args[0].as_str();
 
@@ -1310,31 +1315,12 @@ async fn expand_assignment_value(
 	Ok(expanded)
 }
 
-async fn apply_assignment(
-	assignment: &ast::Assignment,
+async fn expand_assignment_literal(
+	value: &ast::AssignmentValue,
 	shell: &mut Shell,
 	params: &ExecutionParameters,
-	mut export: bool,
-	required_scope: Option<EnvironmentScope>,
-	creation_scope: EnvironmentScope,
-) -> Result<(), error::Error> {
-	// Figure out if we are trying to assign to a variable or assign to an element
-	// of an existing array.
-	let mut array_index;
-	let variable_name = match &assignment.name {
-		ast::AssignmentName::VariableName(name) => {
-			array_index = None;
-			name
-		},
-		ast::AssignmentName::ArrayElementName(name, index) => {
-			let expanded = expansion::basic_expand_str(shell, params, index).await?;
-			array_index = Some(expanded);
-			name
-		},
-	};
-
-	// Expand the values.
-	let new_value = match &assignment.value {
+) -> Result<ShellValueLiteral, error::Error> {
+	Ok(match value {
 		ast::AssignmentValue::Scalar(unexpanded_value) => {
 			let value = expansion::basic_expand_word(shell, params, unexpanded_value).await?;
 			ShellValueLiteral::Scalar(value)
@@ -1362,7 +1348,34 @@ async fn apply_assignment(
 			}
 			ShellValueLiteral::Array(ArrayLiteral(elements))
 		},
+	})
+}
+
+async fn apply_assignment(
+	assignment: &ast::Assignment,
+	shell: &mut Shell,
+	params: &ExecutionParameters,
+	mut export: bool,
+	required_scope: Option<EnvironmentScope>,
+	creation_scope: EnvironmentScope,
+) -> Result<(), error::Error> {
+	// Figure out if we are trying to assign to a variable or assign to an element
+	// of an existing array.
+	let mut array_index;
+	let variable_name = match &assignment.name {
+		ast::AssignmentName::VariableName(name) => {
+			array_index = None;
+			name
+		},
+		ast::AssignmentName::ArrayElementName(name, index) => {
+			let expanded = expansion::basic_expand_str(shell, params, index).await?;
+			array_index = Some(expanded);
+			name
+		},
 	};
+
+	// Expand the values.
+	let new_value = expand_assignment_literal(&assignment.value, shell, params).await?;
 
 	if shell.options.print_commands_and_arguments {
 		let op = if assignment.append { "+=" } else { "=" };
@@ -1478,6 +1491,158 @@ fn setup_pipeline_redirection(
 	Ok(())
 }
 
+async fn setup_filename_redirect(
+	shell: &mut Shell,
+	params: &mut ExecutionParameters,
+	specified_fd_num: Option<ShellFd>,
+	kind: &ast::IoFileRedirectKind,
+	f: &ast::Word,
+) -> Result<(), error::Error> {
+	let mut options = std::fs::File::options();
+
+	let mut expanded_fields = expansion::full_expand_and_split_word(shell, params, f).await?;
+
+	if expanded_fields.len() != 1 {
+		return Err(error::ErrorKind::InvalidRedirection.into());
+	}
+
+	let expanded_file_path: PathBuf =
+		shell.absolute_path(Path::new(expanded_fields.remove(0).as_str()));
+
+	let default_fd_if_unspecified = get_default_fd_for_redirect_kind(kind);
+	match kind {
+		ast::IoFileRedirectKind::Read => {
+			options.read(true);
+		},
+		ast::IoFileRedirectKind::Write => {
+			if shell
+				.options
+				.disallow_overwriting_regular_files_via_output_redirection
+			{
+				// First check to see if the path points to an existing regular
+				// file.
+				if !expanded_file_path.is_file() {
+					options.create(true);
+				} else {
+					options.create_new(true);
+				}
+				options.write(true);
+			} else {
+				options.create(true);
+				options.write(true);
+				options.truncate(true);
+			}
+		},
+		ast::IoFileRedirectKind::Append => {
+			options.create(true);
+			options.append(true);
+		},
+		ast::IoFileRedirectKind::ReadAndWrite => {
+			options.create(true);
+			options.read(true);
+			options.write(true);
+		},
+		ast::IoFileRedirectKind::Clobber => {
+			options.create(true);
+			options.write(true);
+			options.truncate(true);
+		},
+		ast::IoFileRedirectKind::DuplicateInput => {
+			options.read(true);
+		},
+		ast::IoFileRedirectKind::DuplicateOutput => {
+			options.create(true);
+			options.write(true);
+		},
+	}
+
+	let fd_num = specified_fd_num.unwrap_or(default_fd_if_unspecified);
+
+	// Taken from the redirect kind, not inferred from the command text. `ReadAndWrite`
+	// (`<>`) counts as a write: it may create and truncate, and the stricter of the
+	// two is the one a read-only grant must not license.
+	let access = match kind {
+		ast::IoFileRedirectKind::Read | ast::IoFileRedirectKind::DuplicateInput => {
+			crate::containment::FenceAccess::Read
+		},
+		ast::IoFileRedirectKind::Write
+		| ast::IoFileRedirectKind::Append
+		| ast::IoFileRedirectKind::ReadAndWrite
+		| ast::IoFileRedirectKind::Clobber
+		| ast::IoFileRedirectKind::DuplicateOutput => crate::containment::FenceAccess::Write,
+	};
+
+	let opened_file = shell
+		.open_file(&options, &expanded_file_path, params, access)
+		.map_err(|err| {
+			error::ErrorKind::RedirectionFailure(
+				expanded_file_path.to_string_lossy().to_string(),
+				err.to_string(),
+			)
+		})?;
+
+	params.open_files.set_fd(fd_num, opened_file);
+	Ok(())
+}
+
+async fn setup_duplicate_redirect(
+	shell: &mut Shell,
+	params: &mut ExecutionParameters,
+	specified_fd_num: Option<ShellFd>,
+	kind: &ast::IoFileRedirectKind,
+	word: &ast::Word,
+) -> Result<(), error::Error> {
+	let default_fd_if_unspecified = match kind {
+		ast::IoFileRedirectKind::DuplicateInput => 0,
+		ast::IoFileRedirectKind::DuplicateOutput => 1,
+		_ => {
+			return error::unimp("unexpected redirect kind");
+		},
+	};
+
+	let fd_num = specified_fd_num.unwrap_or(default_fd_if_unspecified);
+
+	let mut expanded_fields = expansion::full_expand_and_split_word(shell, params, word).await?;
+
+	if expanded_fields.len() != 1 {
+		return Err(error::ErrorKind::InvalidRedirection.into());
+	}
+
+	let mut expanded = expanded_fields.remove(0);
+
+	let dash = if expanded.ends_with('-') {
+		expanded.pop();
+		true
+	} else {
+		false
+	};
+
+	if expanded.is_empty() {
+		// Nothing to do
+	} else if expanded.chars().all(|c: char| c.is_ascii_digit()) {
+		let source_fd_num = expanded
+			.parse::<ShellFd>()
+			.map_err(|_| error::ErrorKind::InvalidRedirection)?;
+
+		// Duplicate the fd.
+		let target_file = if let Some(f) = params.try_fd(shell, source_fd_num) {
+			f.try_clone()?
+		} else {
+			return Err(error::ErrorKind::BadFileDescriptor(source_fd_num).into());
+		};
+
+		params.open_files.set_fd(fd_num, target_file);
+	} else {
+		return Err(error::ErrorKind::InvalidRedirection.into());
+	}
+
+	if dash {
+		// Close the specified fd. Ignore it if it's not valid.
+		params.open_files.remove_fd(fd_num);
+	}
+	Ok(())
+}
+
 pub(crate) async fn setup_redirect(
 	shell: &mut Shell,
 	params: &'_ mut ExecutionParameters,
@@ -1520,190 +1685,56 @@ pub(crate) async fn setup_redirect(
 			params.open_files.set_fd(OpenFiles::STDERR_FD, stderr_file);
 		},
 
-		ast::IoRedirect::File(specified_fd_num, kind, target) => {
-			match target {
-				ast::IoFileRedirectTarget::Filename(f) => {
-					let mut options = std::fs::File::options();
+		ast::IoRedirect::File(specified_fd_num, kind, target) => match target {
+			ast::IoFileRedirectTarget::Filename(f) => {
+				setup_filename_redirect(shell, params, *specified_fd_num, kind, f).await?;
+			},
 
-					let mut expanded_fields =
-						expansion::full_expand_and_split_word(shell, params, f).await?;
+			ast::IoFileRedirectTarget::Fd(fd) => {
+				let default_fd_if_unspecified = match kind {
+					ast::IoFileRedirectKind::DuplicateInput => 0,
+					ast::IoFileRedirectKind::DuplicateOutput => 1,
+					_ => {
+						return error::unimp("unexpected redirect kind");
+					},
+				};
 
-					if expanded_fields.len() != 1 {
-						return Err(error::ErrorKind::InvalidRedirection.into());
-					}
+				let fd_num = specified_fd_num.unwrap_or(default_fd_if_unspecified);
 
-					let expanded_file_path: PathBuf =
-						shell.absolute_path(Path::new(expanded_fields.remove(0).as_str()));
+				if let Some(f) = params.try_fd(shell, *fd) {
+					let target_file = f.try_clone()?;
 
-					let default_fd_if_unspecified = get_default_fd_for_redirect_kind(kind);
-					match kind {
-						ast::IoFileRedirectKind::Read => {
-							options.read(true);
-						},
-						ast::IoFileRedirectKind::Write => {
-							if shell
-								.options
-								.disallow_overwriting_regular_files_via_output_redirection
-							{
-								// First check to see if the path points to an existing regular
-								// file.
-								if !expanded_file_path.is_file() {
-									options.create(true);
-								} else {
-									options.create_new(true);
-								}
-								options.write(true);
-							} else {
-								options.create(true);
-								options.write(true);
-								options.truncate(true);
-							}
-						},
-						ast::IoFileRedirectKind::Append => {
-							options.create(true);
-							options.append(true);
-						},
-						ast::IoFileRedirectKind::ReadAndWrite => {
-							options.create(true);
-							options.read(true);
-							options.write(true);
-						},
-						ast::IoFileRedirectKind::Clobber => {
-							options.create(true);
-							options.write(true);
-							options.truncate(true);
-						},
-						ast::IoFileRedirectKind::DuplicateInput => {
-							options.read(true);
-						},
-						ast::IoFileRedirectKind::DuplicateOutput => {
-							options.create(true);
-							options.write(true);
-						},
-					}
+					params.open_files.set_fd(fd_num, target_file);
+				} else {
+					return Err(error::ErrorKind::BadFileDescriptor(*fd).into());
+				}
+			},
 
-					let fd_num = specified_fd_num.unwrap_or(default_fd_if_unspecified);
+			ast::IoFileRedirectTarget::Duplicate(word) => {
+				setup_duplicate_redirect(shell, params, *specified_fd_num, kind, word).await?;
+			},
 
-					// Taken from the redirect kind, not inferred from the command text. `ReadAndWrite`
-					// (`<>`) counts as a write: it may create and truncate, and the stricter of the
-					// two is the one a read-only grant must not license.
-					let access = match kind {
-						ast::IoFileRedirectKind::Read | ast::IoFileRedirectKind::DuplicateInput => {
-							crate::containment::FenceAccess::Read
-						},
-						ast::IoFileRedirectKind::Write
-						| ast::IoFileRedirectKind::Append
-						| ast::IoFileRedirectKind::ReadAndWrite
-						| ast::IoFileRedirectKind::Clobber
-						| ast::IoFileRedirectKind::DuplicateOutput => crate::containment::FenceAccess::Write,
-					};
+			ast::IoFileRedirectTarget::ProcessSubstitution(substitution_kind, subshell_cmd) => {
+				match kind {
+					ast::IoFileRedirectKind::Read
+					| ast::IoFileRedirectKind::Write
+					| ast::IoFileRedirectKind::Append
+					| ast::IoFileRedirectKind::ReadAndWrite
+					| ast::IoFileRedirectKind::Clobber => {
+						let (substitution_fd, substitution_file) =
+							setup_process_substitution(shell, params, substitution_kind, subshell_cmd)?;
 
-					let opened_file = shell
-						.open_file(&options, &expanded_file_path, params, access)
-						.map_err(|err| {
-							error::ErrorKind::RedirectionFailure(
-								expanded_file_path.to_string_lossy().to_string(),
-								err.to_string(),
-							)
-						})?;
+						let target_file = substitution_file.try_clone()?;
+						params.open_files.set_fd(substitution_fd, substitution_file);
 
-					params.open_files.set_fd(fd_num, opened_file);
-				},
-
-				ast::IoFileRedirectTarget::Fd(fd) => {
-					let default_fd_if_unspecified = match kind {
-						ast::IoFileRedirectKind::DuplicateInput => 0,
-						ast::IoFileRedirectKind::DuplicateOutput => 1,
-						_ => {
-							return error::unimp("unexpected redirect kind");
-						},
-					};
-
-					let fd_num = specified_fd_num.unwrap_or(default_fd_if_unspecified);
-
-					if let Some(f) = params.try_fd(shell, *fd) {
-						let target_file = f.try_clone()?;
+						let fd_num =
+							specified_fd_num.unwrap_or_else(|| get_default_fd_for_redirect_kind(kind));
 
 						params.open_files.set_fd(fd_num, target_file);
-					} else {
-						return Err(error::ErrorKind::BadFileDescriptor(*fd).into());
-					}
-				},
-
-				ast::IoFileRedirectTarget::Duplicate(word) => {
-					let default_fd_if_unspecified = match kind {
-						ast::IoFileRedirectKind::DuplicateInput => 0,
-						ast::IoFileRedirectKind::DuplicateOutput => 1,
-						_ => {
-							return error::unimp("unexpected redirect kind");
-						},
-					};
-
-					let fd_num = specified_fd_num.unwrap_or(default_fd_if_unspecified);
-
-					let mut expanded_fields =
-						expansion::full_expand_and_split_word(shell, params, word).await?;
-
-					if expanded_fields.len() != 1 {
-						return Err(error::ErrorKind::InvalidRedirection.into());
-					}
-
-					let mut expanded = expanded_fields.remove(0);
-
-					let dash = if expanded.ends_with('-') {
-						expanded.pop();
-						true
-					} else {
-						false
-					};
-
-					if expanded.is_empty() {
-						// Nothing to do
-					} else if expanded.chars().all(|c: char| c.is_ascii_digit()) {
-						let source_fd_num = expanded
-							.parse::<ShellFd>()
-							.map_err(|_| error::ErrorKind::InvalidRedirection)?;
-
-						// Duplicate the fd.
-						let target_file = if let Some(f) = params.try_fd(shell, source_fd_num) {
-							f.try_clone()?
-						} else {
-							return Err(error::ErrorKind::BadFileDescriptor(source_fd_num).into());
-						};
-
-						params.open_files.set_fd(fd_num, target_file);
-					} else {
-						return Err(error::ErrorKind::InvalidRedirection.into());
-					}
-
-					if dash {
-						// Close the specified fd. Ignore it if it's not valid.
-						params.open_files.remove_fd(fd_num);
-					}
-				},
-
-				ast::IoFileRedirectTarget::ProcessSubstitution(substitution_kind, subshell_cmd) => {
-					match kind {
-						ast::IoFileRedirectKind::Read
-						| ast::IoFileRedirectKind::Write
-						| ast::IoFileRedirectKind::Append
-						| ast::IoFileRedirectKind::ReadAndWrite
-						| ast::IoFileRedirectKind::Clobber => {
-							let (substitution_fd, substitution_file) =
-								setup_process_substitution(shell, params, substitution_kind, subshell_cmd)?;
-
-							let target_file = substitution_file.try_clone()?;
-							params.open_files.set_fd(substitution_fd, substitution_file);
-
-							let fd_num =
-								specified_fd_num.unwrap_or_else(|| get_default_fd_for_redirect_kind(kind));
-
-							params.open_files.set_fd(fd_num, target_file);
-						},
-						_ => return error::unimp("invalid process substitution"),
-					}
-				},
-			}
+					},
+					_ => return error::unimp("invalid process substitution"),
+				}
+			},
 		},
 
 		ast::IoRedirect::HereDocument(fd_num, io_here) => {

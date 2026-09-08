@@ -41,41 +41,43 @@ impl builtins::Command for EchoCommand {
 		Ok(this)
 	}
 
-	async fn execute(
+	fn execute(
 		&self,
 		context: brush_core::ExecutionContext<'_>,
-	) -> Result<brush_core::ExecutionResult, Self::Error> {
-		let mut trailing_newline = !self.no_trailing_newline;
-		let mut s;
-		if self.interpret_backslash_escapes {
-			s = String::new();
-			for (i, arg) in self.args.iter().enumerate() {
-				if i > 0 {
-					s.push(' ');
-				}
+	) -> impl Future<Output = Result<brush_core::ExecutionResult, Self::Error>> {
+		futures::future::lazy(move |_| {
+			let mut trailing_newline = !self.no_trailing_newline;
+			let mut s;
+			if self.interpret_backslash_escapes {
+				s = String::new();
+				for (i, arg) in self.args.iter().enumerate() {
+					if i > 0 {
+						s.push(' ');
+					}
 
-				let (expanded_arg, keep_going) = escape::expand_backslash_escapes(
-					arg.as_str(),
-					escape::EscapeExpansionMode::EchoBuiltin,
-				)?;
-				s.push_str(&String::from_utf8_lossy(expanded_arg.as_slice()));
+					let (expanded_arg, keep_going) = escape::expand_backslash_escapes(
+						arg.as_str(),
+						escape::EscapeExpansionMode::EchoBuiltin,
+					)?;
+					s.push_str(&String::from_utf8_lossy(expanded_arg.as_slice()));
 
-				if !keep_going {
-					trailing_newline = false;
-					break;
+					if !keep_going {
+						trailing_newline = false;
+						break;
+					}
 				}
+			} else {
+				s = self.args.join(" ");
 			}
-		} else {
-			s = self.args.join(" ");
-		}
 
-		if trailing_newline {
-			s.push('\n');
-		}
+			if trailing_newline {
+				s.push('\n');
+			}
 
-		write!(context.stdout(), "{s}")?;
-		context.stdout().flush()?;
+			write!(context.stdout(), "{s}")?;
+			context.stdout().flush()?;
 
-		Ok(ExecutionResult::success())
+			Ok(ExecutionResult::success())
+		})
 	}
 }

@@ -424,69 +424,71 @@ pub(crate) struct ULimitCommand {
 impl builtins::Command for ULimitCommand {
 	type Error = brush_core::Error;
 
-	async fn execute(
+	fn execute(
 		&self,
 		context: brush_core::ExecutionContext<'_>,
-	) -> Result<brush_core::ExecutionResult, Self::Error> {
-		let exit_code = ExecutionResult::success();
-		let mut resources_to_set = Vec::new();
-		let mut resources_to_get = Vec::new();
+	) -> impl Future<Output = Result<brush_core::ExecutionResult, Self::Error>> {
+		futures::future::lazy(move |_| {
+			let exit_code = ExecutionResult::success();
+			let mut resources_to_set = Vec::new();
+			let mut resources_to_get = Vec::new();
 
-		let mut set_or_get = |val, descr| {
-			match val {
-				Some(LimitValue::Unset) => resources_to_get.push(descr),
-				Some(v) => resources_to_set.push((descr, v)),
-				None => {},
-			}
-			if self.all {
-				resources_to_get.push(descr);
-			}
-		};
+			let mut set_or_get = |val, descr| {
+				match val {
+					Some(LimitValue::Unset) => resources_to_get.push(descr),
+					Some(v) => resources_to_set.push((descr, v)),
+					None => {},
+				}
+				if self.all {
+					resources_to_get.push(descr);
+				}
+			};
 
-		set_or_get(self.sbsize, ResourceDescription::SBSIZE);
-		set_or_get(self.core, ResourceDescription::CORE);
-		set_or_get(self.data, ResourceDescription::DATA);
-		set_or_get(self.file_size, ResourceDescription::FSIZE);
-		set_or_get(self.sigpending, ResourceDescription::SIGPENDING);
-		set_or_get(self.kqueues, ResourceDescription::KQUEUES);
-		set_or_get(self.memlock, ResourceDescription::MEMLOCK);
-		set_or_get(self.rss, ResourceDescription::RSS);
-		set_or_get(self.file_lock, ResourceDescription::LOCKS);
-		set_or_get(self.file_open, ResourceDescription::NOFILE);
-		set_or_get(self.pipe, ResourceDescription::PIPE);
-		set_or_get(self.npts, ResourceDescription::NPTS);
-		set_or_get(self.nice, ResourceDescription::NICE);
-		set_or_get(self.msgqueue, ResourceDescription::MSGQUEUE);
-		set_or_get(self.rtprio, ResourceDescription::RTPRIO);
-		set_or_get(self.rttime, ResourceDescription::RTTIME);
-		set_or_get(self.stack, ResourceDescription::STACK);
-		set_or_get(self.threads, ResourceDescription::THREADS);
-		set_or_get(self.cpu, ResourceDescription::CPU);
-		set_or_get(self.nproc, ResourceDescription::NPROC);
-		set_or_get(self.vmem, ResourceDescription::VMEM);
+			set_or_get(self.sbsize, ResourceDescription::SBSIZE);
+			set_or_get(self.core, ResourceDescription::CORE);
+			set_or_get(self.data, ResourceDescription::DATA);
+			set_or_get(self.file_size, ResourceDescription::FSIZE);
+			set_or_get(self.sigpending, ResourceDescription::SIGPENDING);
+			set_or_get(self.kqueues, ResourceDescription::KQUEUES);
+			set_or_get(self.memlock, ResourceDescription::MEMLOCK);
+			set_or_get(self.rss, ResourceDescription::RSS);
+			set_or_get(self.file_lock, ResourceDescription::LOCKS);
+			set_or_get(self.file_open, ResourceDescription::NOFILE);
+			set_or_get(self.pipe, ResourceDescription::PIPE);
+			set_or_get(self.npts, ResourceDescription::NPTS);
+			set_or_get(self.nice, ResourceDescription::NICE);
+			set_or_get(self.msgqueue, ResourceDescription::MSGQUEUE);
+			set_or_get(self.rtprio, ResourceDescription::RTPRIO);
+			set_or_get(self.rttime, ResourceDescription::RTTIME);
+			set_or_get(self.stack, ResourceDescription::STACK);
+			set_or_get(self.threads, ResourceDescription::THREADS);
+			set_or_get(self.cpu, ResourceDescription::CPU);
+			set_or_get(self.nproc, ResourceDescription::NPROC);
+			set_or_get(self.vmem, ResourceDescription::VMEM);
 
-		if resources_to_set.is_empty() {
-			if resources_to_get.is_empty() {
-				if let Some(fsize) = self.limit {
-					resources_to_set.push((ResourceDescription::FSIZE, fsize));
-				} else {
-					resources_to_get.push(ResourceDescription::FSIZE);
+			if resources_to_set.is_empty() {
+				if resources_to_get.is_empty() {
+					if let Some(fsize) = self.limit {
+						resources_to_set.push((ResourceDescription::FSIZE, fsize));
+					} else {
+						resources_to_get.push(ResourceDescription::FSIZE);
+					}
 				}
 			}
-		}
 
-		for (resource, value) in resources_to_set {
-			resource.set(self.hard, value)?;
-		}
-
-		if resources_to_get.len() == 1 {
-			writeln!(context.stdout(), "{}", resources_to_get[0].get(self.hard)?)?;
-		} else {
-			for resource in resources_to_get {
-				resource.print(&context, self.hard)?;
+			for (resource, value) in resources_to_set {
+				resource.set(self.hard, value)?;
 			}
-		}
 
-		Ok(exit_code)
+			if resources_to_get.len() == 1 {
+				writeln!(context.stdout(), "{}", resources_to_get[0].get(self.hard)?)?;
+			} else {
+				for resource in resources_to_get {
+					resource.print(&context, self.hard)?;
+				}
+			}
+
+			Ok(exit_code)
+		})
 	}
 }

@@ -13,6 +13,18 @@ pub(crate) fn initialize_vars(
 	shell: &mut Shell,
 	do_not_inherit_env: bool,
 ) -> Result<(), error::Error> {
+	inherit_vars(shell, do_not_inherit_env)?;
+	initialize_bash_identity(shell)?;
+	initialize_bash_state(shell)?;
+	initialize_time_and_user_vars(shell)?;
+	initialize_host_and_path_vars(shell)?;
+	initialize_process_vars(shell)?;
+	initialize_prompt_and_directory_vars(shell)?;
+	Ok(())
+}
+
+/// Returns a list of the current user's group IDs, with the effective GID at the front.
+fn inherit_vars(shell: &mut Shell, do_not_inherit_env: bool) -> Result<(), error::Error> {
 	// Seed parameters from environment (unless requested not to do so).
 	if !do_not_inherit_env {
 		for (k, v) in std::env::vars() {
@@ -42,6 +54,10 @@ pub(crate) fn initialize_vars(
 
 	// TODO(#479): implement $_
 
+	Ok(())
+}
+
+fn initialize_bash_identity(shell: &mut Shell) -> Result<(), error::Error> {
 	// BASH
 	if let Some(shell_name) = &shell.shell_name {
 		shell
@@ -114,6 +130,10 @@ pub(crate) fn initialize_vars(
 	// TODO(vars): implement BASH_EXECUTIION_STRING
 	// TODO(vars): implement BASH_LINENO
 
+	Ok(())
+}
+
+fn initialize_bash_state(shell: &mut Shell) -> Result<(), error::Error> {
 	// BASH_SOURCE
 	shell.env.set_global(
 		"BASH_SOURCE",
@@ -177,6 +197,10 @@ pub(crate) fn initialize_vars(
 		}),
 	)?;
 
+	Ok(())
+}
+
+fn initialize_time_and_user_vars(shell: &mut Shell) -> Result<(), error::Error> {
 	// EPOCHREALTIME
 	shell.env.set_global(
 		"EPOCHREALTIME",
@@ -260,6 +284,10 @@ pub(crate) fn initialize_vars(
 		}
 	}
 
+	Ok(())
+}
+
+fn initialize_host_and_path_vars(shell: &mut Shell) -> Result<(), error::Error> {
 	// HOSTNAME
 	shell.env.set_global(
 		"HOSTNAME",
@@ -322,9 +350,10 @@ pub(crate) fn initialize_vars(
 	// PATH (if not already set)
 	if !shell.env.is_set("PATH") {
 		let default_paths = sys::fs::get_default_executable_search_paths();
-		let default_path_str = std::env::join_paths(default_paths.iter())
-			.map(|paths| paths.to_string_lossy().to_string())
-			.unwrap_or_else(|_| default_paths.join(if cfg!(windows) { ";" } else { ":" }));
+		let default_path_str = std::env::join_paths(default_paths.iter()).map_or_else(
+			|_| default_paths.join(if cfg!(windows) { ";" } else { ":" }),
+			|paths| paths.to_string_lossy().to_string(),
+		);
 		shell
 			.env
 			.set_global("PATH", ShellVariable::new(default_path_str))?;
@@ -345,6 +374,10 @@ pub(crate) fn initialize_vars(
 		}),
 	)?;
 
+	Ok(())
+}
+
+fn initialize_process_vars(shell: &mut Shell) -> Result<(), error::Error> {
 	// PPID
 	if let Some(ppid) = sys::terminal::get_parent_process_id() {
 		let mut ppid_var = ShellVariable::new(ppid.to_string());
@@ -403,6 +436,10 @@ pub(crate) fn initialize_vars(
 	random_var.treat_as_integer();
 	shell.env.set_global("SRANDOM", random_var)?;
 
+	Ok(())
+}
+
+fn initialize_prompt_and_directory_vars(shell: &mut Shell) -> Result<(), error::Error> {
 	// PS1 / PS2
 	if shell.options.interactive {
 		if !shell.env.is_set("PS1") {
@@ -443,7 +480,6 @@ pub(crate) fn initialize_vars(
 	Ok(())
 }
 
-/// Returns a list of the current user's group IDs, with the effective GID at the front.
 fn get_current_user_gids() -> Vec<u32> {
 	let mut groups = sys::users::get_user_group_ids().unwrap_or_default();
 

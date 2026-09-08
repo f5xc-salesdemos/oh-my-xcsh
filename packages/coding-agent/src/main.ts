@@ -681,7 +681,10 @@ export async function runRootCommand(rawArgs: string[]): Promise<void> {
 
 	// Create AuthStorage and ModelRegistry upfront
 	const authStorage = await logger.time("discoverModels", discoverAuthStorage);
-	const modelRegistry = new ModelRegistry(authStorage);
+	const registrySettings = await Settings.init({ cwd: getProjectDir() });
+	const modelRegistry = new ModelRegistry(authStorage, undefined, {
+		getProviderOrder: () => registrySettings.get("modelProviderOrder"),
+	});
 
 	// The three early exits below return before extensions load, so no extension flag could ever be
 	// legal on them: anything unrecognized on those paths is a typo and is reported now. Every other

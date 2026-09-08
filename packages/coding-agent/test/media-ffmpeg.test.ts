@@ -5,6 +5,9 @@ import * as path from "node:path";
 import { decodeRasterFrames } from "../src/media/ffmpeg";
 
 const ffmpeg = Bun.which("ffmpeg");
+const encoders = ffmpeg ? Bun.spawnSync([ffmpeg, "-hide_banner", "-encoders"]) : undefined;
+if (encoders && encoders.exitCode !== 0) throw new Error(encoders.stderr.toString());
+const hasWebpEncoder = /\blibwebp_anim\b/.test(encoders?.stdout.toString() ?? "");
 
 function generateVideo(): Buffer {
 	if (!ffmpeg) throw new Error("ffmpeg unavailable");
@@ -70,16 +73,20 @@ describe.skipIf(!ffmpeg)("decodeRasterFrames", () => {
 		}
 	});
 
-	test("decodes animated GIF and WebP through the same silent frame pipeline", async () => {
-		for (const format of ["gif", "webp"] as const) {
-			const decoded = await decodeRasterFrames(generateAnimation(format), {
-				ffmpegPath: ffmpeg!,
-				fpsCap: 6,
-				maxFrames: 10,
-			});
-			expect(decoded?.length).toBeGreaterThan(1);
-		}
-	});
+	for (const format of ["gif", "webp"] as const) {
+		const missingEncoder = format === "webp" && !hasWebpEncoder;
+		test.skipIf(missingEncoder)(
+			`decodes animated ${format}${missingEncoder ? " (fixture unavailable: FFmpeg lacks libwebp_anim encoder)" : ""}`,
+			async () => {
+				const decoded = await decodeRasterFrames(generateAnimation(format), {
+					ffmpegPath: ffmpeg!,
+					fpsCap: 6,
+					maxFrames: 10,
+				});
+				expect(decoded?.length).toBeGreaterThan(1);
+			},
+		);
+	}
 
 	test("rejects corrupt media and output that exceeds the streaming bound", async () => {
 		expect(await decodeRasterFrames(Buffer.from("not-media"), { ffmpegPath: ffmpeg! })).toBeNull();

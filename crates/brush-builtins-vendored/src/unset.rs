@@ -39,53 +39,58 @@ impl UnsetNameInterpretation {
 impl builtins::Command for UnsetCommand {
 	type Error = brush_core::Error;
 
-	async fn execute(
+	fn execute(
 		&self,
 		context: brush_core::ExecutionContext<'_>,
-	) -> Result<brush_core::ExecutionResult, Self::Error> {
-		//
-		// TODO: implement nameref
-		//
-		if self.name_interpretation.name_references {
-			return brush_core::error::unimp("unset: name references are not yet implemented");
-		}
+	) -> impl Future<Output = Result<brush_core::ExecutionResult, Self::Error>> {
+		futures::future::lazy(move |_| {
+			//
+			// TODO: implement nameref
+			//
+			if self.name_interpretation.name_references {
+				return brush_core::error::unimp("unset: name references are not yet implemented");
+			}
 
-		let unspecified = self.name_interpretation.unspecified();
+			let unspecified = self.name_interpretation.unspecified();
 
-		#[expect(clippy::needless_continue)]
-		for name in &self.names {
-			if unspecified || self.name_interpretation.shell_variables {
-				let parameter =
-					brush_parser::word::parse_parameter(name, &context.shell.parser_options())?;
+			#[expect(clippy::needless_continue)]
+			for name in &self.names {
+				if unspecified || self.name_interpretation.shell_variables {
+					let parameter =
+						brush_parser::word::parse_parameter(name, &context.shell.parser_options())?;
 
-				let result = match parameter {
-					brush_parser::word::Parameter::Positional(_) => continue,
-					brush_parser::word::Parameter::Special(_) => continue,
-					brush_parser::word::Parameter::Named(name) => {
-						context.shell.env.unset(name.as_str())?.is_some()
-					},
-					brush_parser::word::Parameter::NamedWithIndex { name, index } => {
-						unset_array_index(context.shell, name.as_str(), index.as_str())?
-					},
-					brush_parser::word::Parameter::NamedWithAllIndices { name: _, concatenate: _ } => {
+					let result = match parameter {
+						brush_parser::word::Parameter::Positional(_) => continue,
+						brush_parser::word::Parameter::Special(_) => continue,
+						brush_parser::word::Parameter::Named(name) => {
+							context.shell.env.unset(name.as_str())?.is_some()
+						},
+						brush_parser::word::Parameter::NamedWithIndex { name, index } => {
+							unset_array_index(context.shell, name.as_str(), index.as_str())?
+						},
+						brush_parser::word::Parameter::NamedWithAllIndices {
+							name: _,
+							concatenate: _,
+						} => {
+							continue;
+						},
+					};
+
+					if result {
 						continue;
-					},
-				};
+					}
+				}
 
-				if result {
-					continue;
+				// TODO: Deal with readonly functions
+				if unspecified || self.name_interpretation.shell_functions {
+					if context.shell.undefine_func(name) {
+						continue;
+					}
 				}
 			}
 
-			// TODO: Deal with readonly functions
-			if unspecified || self.name_interpretation.shell_functions {
-				if context.shell.undefine_func(name) {
-					continue;
-				}
-			}
-		}
-
-		Ok(ExecutionResult::success())
+			Ok(ExecutionResult::success())
+		})
 	}
 }
 

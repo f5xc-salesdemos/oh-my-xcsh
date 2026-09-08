@@ -21,7 +21,6 @@ pub enum EscapeExpansionMode {
 ///
 /// * `s` - The string to expand.
 /// * `mode` - The mode to use for expansion.
-
 pub fn expand_backslash_escapes(
 	s: &str,
 	mode: EscapeExpansionMode,
@@ -66,17 +65,7 @@ pub fn expand_backslash_escapes(
 			Some('?') if matches!(mode, EscapeExpansionMode::AnsiCQuotes) => result.push(b'?'),
 			Some('0') => {
 				// Consume 0-3 valid octal chars
-				let mut taken_so_far = 0;
-				let mut octal_chars: String = it
-					.take_while_ref(|c| {
-						if taken_so_far < 3 && matches!(*c, '0'..='7') {
-							taken_so_far += 1;
-							true
-						} else {
-							false
-						}
-					})
-					.collect();
+				let mut octal_chars = take_escape_digits(&mut it, 3, 8);
 
 				if octal_chars.is_empty() {
 					octal_chars.push('0');
@@ -87,17 +76,7 @@ pub fn expand_backslash_escapes(
 			},
 			Some('x') => {
 				// Consume 1-2 valid hex chars
-				let mut taken_so_far = 0;
-				let hex_chars: String = it
-					.take_while_ref(|c| {
-						if taken_so_far < 2 && c.is_ascii_hexdigit() {
-							taken_so_far += 1;
-							true
-						} else {
-							false
-						}
-					})
-					.collect();
+				let hex_chars = take_escape_digits(&mut it, 2, 16);
 
 				if hex_chars.is_empty() {
 					result.push(b'\\');
@@ -109,17 +88,7 @@ pub fn expand_backslash_escapes(
 			},
 			Some('u') => {
 				// Consume 1-4 hex digits
-				let mut taken_so_far = 0;
-				let hex_chars: String = it
-					.take_while_ref(|c| {
-						if taken_so_far < 4 && c.is_ascii_hexdigit() {
-							taken_so_far += 1;
-							true
-						} else {
-							false
-						}
-					})
-					.collect();
+				let hex_chars = take_escape_digits(&mut it, 4, 16);
 
 				if hex_chars.is_empty() {
 					result.push(b'\\');
@@ -137,17 +106,7 @@ pub fn expand_backslash_escapes(
 			},
 			Some('U') => {
 				// Consume 1-8 hex digits
-				let mut taken_so_far = 0;
-				let hex_chars: String = it
-					.take_while_ref(|c| {
-						if taken_so_far < 8 && c.is_ascii_hexdigit() {
-							taken_so_far += 1;
-							true
-						} else {
-							false
-						}
-					})
-					.collect();
+				let hex_chars = take_escape_digits(&mut it, 8, 16);
 
 				if hex_chars.is_empty() {
 					result.push(b'\\');
@@ -176,6 +135,19 @@ pub fn expand_backslash_escapes(
 	}
 
 	Ok((result, true))
+}
+
+fn take_escape_digits(it: &mut std::str::Chars<'_>, limit: usize, radix: u32) -> String {
+	let mut taken = 0;
+	it.take_while_ref(|c| {
+		if taken < limit && c.is_digit(radix) {
+			taken += 1;
+			true
+		} else {
+			false
+		}
+	})
+	.collect()
 }
 
 /// Quoting mode to use for escaping.

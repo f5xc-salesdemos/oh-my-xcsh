@@ -42,7 +42,9 @@ async function runLegacyCommitCommand(args: CommitCommandArgs): Promise<void> {
 	const settings = await Settings.init();
 	const commitSettings = settings.getGroup("commit");
 	const authStorage = await discoverAuthStorage();
-	const modelRegistry = new ModelRegistry(authStorage);
+	const modelRegistry = new ModelRegistry(authStorage, undefined, {
+		getProviderOrder: () => settings.get("modelProviderOrder"),
+	});
 	await modelRegistry.refresh();
 
 	const {

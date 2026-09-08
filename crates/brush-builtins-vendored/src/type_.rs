@@ -46,97 +46,99 @@ enum ResolvedType<'a> {
 impl builtins::Command for TypeCommand {
 	type Error = brush_core::Error;
 
-	async fn execute(
+	fn execute(
 		&self,
 		context: brush_core::ExecutionContext<'_>,
-	) -> Result<brush_core::ExecutionResult, Self::Error> {
-		let mut result = ExecutionResult::success();
+	) -> impl Future<Output = Result<brush_core::ExecutionResult, Self::Error>> {
+		futures::future::lazy(move |_| {
+			let mut result = ExecutionResult::success();
 
-		for name in &self.names {
-			let resolved_types = self.resolve_types(context.shell, name);
+			for name in &self.names {
+				let resolved_types = self.resolve_types(context.shell, name);
 
-			if resolved_types.is_empty() {
-				if !self.type_only && !self.force_path_search && !self.show_path_only {
-					writeln!(context.stderr(), "type: {name} not found")?;
+				if resolved_types.is_empty() {
+					if !self.type_only && !self.force_path_search && !self.show_path_only {
+						writeln!(context.stderr(), "type: {name} not found")?;
+					}
+
+					result = ExecutionResult::general_error();
+					continue;
 				}
 
-				result = ExecutionResult::general_error();
-				continue;
+				for resolved_type in resolved_types {
+					if self.show_path_only && !matches!(resolved_type, ResolvedType::File { .. }) {
+						// Do nothing.
+					} else if self.type_only {
+						match resolved_type {
+							ResolvedType::Alias(_) => {
+								writeln!(context.stdout(), "alias")?;
+							},
+							ResolvedType::Keyword => {
+								writeln!(context.stdout(), "keyword")?;
+							},
+							ResolvedType::Function(_) => {
+								writeln!(context.stdout(), "function")?;
+							},
+							ResolvedType::Builtin => {
+								writeln!(context.stdout(), "builtin")?;
+							},
+							ResolvedType::File { path, .. } => {
+								if self.show_path_only || self.force_path_search {
+									writeln!(context.stdout(), "{}", path.to_string_lossy())?;
+								} else {
+									writeln!(context.stdout(), "file")?;
+								}
+							},
+						}
+					} else {
+						match resolved_type {
+							ResolvedType::Alias(target) => {
+								writeln!(context.stdout(), "{name} is aliased to '{target}'")?;
+							},
+							ResolvedType::Keyword => {
+								writeln!(context.stdout(), "{name} is a shell keyword")?;
+							},
+							ResolvedType::Function(def) => {
+								writeln!(context.stdout(), "{name} is a function")?;
+								writeln!(context.stdout(), "{def}")?;
+							},
+							ResolvedType::Builtin => {
+								writeln!(context.stdout(), "{name} is a shell builtin")?;
+							},
+							ResolvedType::File { path, hashed } => {
+								if hashed && self.all_locations && !self.force_path_search {
+									// Do nothing. When we're displaying all locations, then
+									// we don't show hashed paths.
+								} else if self.show_path_only || self.force_path_search {
+									writeln!(context.stdout(), "{}", path.to_string_lossy())?;
+								} else if hashed {
+									writeln!(
+										context.stdout(),
+										"{name} is hashed ({path})",
+										name = name,
+										path = path.to_string_lossy()
+									)?;
+								} else {
+									writeln!(
+										context.stdout(),
+										"{name} is {path}",
+										name = name,
+										path = path.to_string_lossy()
+									)?;
+								}
+							},
+						}
+					}
+
+					// If we only want the first, then break after the first.
+					if !self.all_locations {
+						break;
+					}
+				}
 			}
 
-			for resolved_type in resolved_types {
-				if self.show_path_only && !matches!(resolved_type, ResolvedType::File { .. }) {
-					// Do nothing.
-				} else if self.type_only {
-					match resolved_type {
-						ResolvedType::Alias(_) => {
-							writeln!(context.stdout(), "alias")?;
-						},
-						ResolvedType::Keyword => {
-							writeln!(context.stdout(), "keyword")?;
-						},
-						ResolvedType::Function(_) => {
-							writeln!(context.stdout(), "function")?;
-						},
-						ResolvedType::Builtin => {
-							writeln!(context.stdout(), "builtin")?;
-						},
-						ResolvedType::File { path, .. } => {
-							if self.show_path_only || self.force_path_search {
-								writeln!(context.stdout(), "{}", path.to_string_lossy())?;
-							} else {
-								writeln!(context.stdout(), "file")?;
-							}
-						},
-					}
-				} else {
-					match resolved_type {
-						ResolvedType::Alias(target) => {
-							writeln!(context.stdout(), "{name} is aliased to '{target}'")?;
-						},
-						ResolvedType::Keyword => {
-							writeln!(context.stdout(), "{name} is a shell keyword")?;
-						},
-						ResolvedType::Function(def) => {
-							writeln!(context.stdout(), "{name} is a function")?;
-							writeln!(context.stdout(), "{def}")?;
-						},
-						ResolvedType::Builtin => {
-							writeln!(context.stdout(), "{name} is a shell builtin")?;
-						},
-						ResolvedType::File { path, hashed } => {
-							if hashed && self.all_locations && !self.force_path_search {
-								// Do nothing. When we're displaying all locations, then
-								// we don't show hashed paths.
-							} else if self.show_path_only || self.force_path_search {
-								writeln!(context.stdout(), "{}", path.to_string_lossy())?;
-							} else if hashed {
-								writeln!(
-									context.stdout(),
-									"{name} is hashed ({path})",
-									name = name,
-									path = path.to_string_lossy()
-								)?;
-							} else {
-								writeln!(
-									context.stdout(),
-									"{name} is {path}",
-									name = name,
-									path = path.to_string_lossy()
-								)?;
-							}
-						},
-					}
-				}
-
-				// If we only want the first, then break after the first.
-				if !self.all_locations {
-					break;
-				}
-			}
-		}
-
-		Ok(result)
+			Ok(result)
+		})
 	}
 }
 

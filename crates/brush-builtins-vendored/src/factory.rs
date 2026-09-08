@@ -21,7 +21,6 @@ pub enum BuiltinSet {
 /// # Arguments
 ///
 /// * `set` - The set of built-ins to return.
-
 pub fn default_builtins(set: BuiltinSet) -> HashMap<String, builtins::Registration> {
 	let mut m = HashMap::<String, builtins::Registration>::new();
 
@@ -113,67 +112,7 @@ pub fn default_builtins(set: BuiltinSet) -> HashMap<String, builtins::Registrati
 	m.insert("fc".into(), builtin::<fc::FcCommand>());
 
 	if matches!(set, BuiltinSet::BashMode) {
-		#[cfg(feature = "builtin.builtin")]
-		m.insert("builtin".into(), raw_arg_builtin::<builtin_::BuiltinCommand>());
-		#[cfg(feature = "builtin.declare")]
-		m.insert("declare".into(), decl_builtin::<declare::DeclareCommand>());
-		#[cfg(feature = "builtin.echo")]
-		m.insert("echo".into(), builtin::<echo::EchoCommand>());
-		#[cfg(feature = "builtin.enable")]
-		m.insert("enable".into(), builtin::<enable::EnableCommand>());
-		#[cfg(feature = "builtin.let")]
-		m.insert("let".into(), builtin::<let_::LetCommand>());
-		#[cfg(feature = "builtin.mapfile")]
-		m.insert("mapfile".into(), builtin::<mapfile::MapFileCommand>());
-		#[cfg(feature = "builtin.mapfile")]
-		m.insert("readarray".into(), builtin::<mapfile::MapFileCommand>());
-		#[cfg(all(feature = "builtin.printf", any(unix, windows)))]
-		m.insert("printf".into(), builtin::<printf::PrintfCommand>());
-		#[cfg(feature = "builtin.shopt")]
-		m.insert("shopt".into(), builtin::<shopt::ShoptCommand>());
-		#[cfg(feature = "builtin.dot")]
-		m.insert("source".into(), builtin::<dot::DotCommand>().special());
-		#[cfg(all(feature = "builtin.suspend", unix))]
-		m.insert("suspend".into(), builtin::<suspend::SuspendCommand>());
-		#[cfg(feature = "builtin.test")]
-		m.insert("test".into(), builtin::<test::TestCommand>());
-		#[cfg(feature = "builtin.test")]
-		m.insert("[".into(), builtin::<test::TestCommand>());
-		#[cfg(feature = "builtin.declare")]
-		m.insert("typeset".into(), decl_builtin::<declare::DeclareCommand>());
-
-		// Completion builtins
-		#[cfg(feature = "builtin.complete")]
-		m.insert("complete".into(), builtin::<complete::CompleteCommand>());
-		#[cfg(feature = "builtin.compgen")]
-		m.insert("compgen".into(), builtin::<complete::CompGenCommand>());
-		#[cfg(feature = "builtin.compopt")]
-		m.insert("compopt".into(), builtin::<complete::CompOptCommand>());
-
-		// Dir stack builtins
-		#[cfg(feature = "builtin.dirs")]
-		m.insert("dirs".into(), builtin::<dirs::DirsCommand>());
-		#[cfg(feature = "builtin.popd")]
-		m.insert("popd".into(), builtin::<popd::PopdCommand>());
-		#[cfg(feature = "builtin.pushd")]
-		m.insert("pushd".into(), builtin::<pushd::PushdCommand>());
-
-		// Input configuration builtins
-		#[cfg(feature = "builtin.bind")]
-		m.insert("bind".into(), builtin::<bind::BindCommand>());
-
-		// History
-		#[cfg(feature = "builtin.history")]
-		m.insert("history".into(), builtin::<history::HistoryCommand>());
-
-		// TODO: implement caller builtin
-		m.insert("caller".into(), builtin::<unimp::UnimplementedCommand>());
-
-		// TODO: implement disown builtin
-		m.insert("disown".into(), builtin::<unimp::UnimplementedCommand>());
-
-		// TODO: implement logout builtin
-		m.insert("logout".into(), builtin::<unimp::UnimplementedCommand>());
+		add_bash_builtins(&mut m);
 	}
 
 	//
@@ -183,4 +122,68 @@ pub fn default_builtins(set: BuiltinSet) -> HashMap<String, builtins::Registrati
 	m.insert("brushinfo".into(), builtin::<brushinfo::BrushInfoCommand>());
 
 	m
+}
+
+fn add_bash_builtins(m: &mut HashMap<String, builtins::Registration>) {
+	#[cfg(feature = "builtin.builtin")]
+	m.insert("builtin".into(), raw_arg_builtin::<builtin_::BuiltinCommand>());
+	#[cfg(feature = "builtin.declare")]
+	m.insert("declare".into(), decl_builtin::<declare::DeclareCommand>());
+	#[cfg(feature = "builtin.echo")]
+	m.insert("echo".into(), builtin::<echo::EchoCommand>());
+	#[cfg(feature = "builtin.enable")]
+	m.insert("enable".into(), builtin::<enable::EnableCommand>());
+	#[cfg(feature = "builtin.let")]
+	m.insert("let".into(), builtin::<let_::LetCommand>());
+	#[cfg(feature = "builtin.mapfile")]
+	m.insert("mapfile".into(), builtin::<mapfile::MapFileCommand>());
+	#[cfg(feature = "builtin.mapfile")]
+	m.insert("readarray".into(), builtin::<mapfile::MapFileCommand>());
+	#[cfg(all(feature = "builtin.printf", any(unix, windows)))]
+	m.insert("printf".into(), builtin::<printf::PrintfCommand>());
+	#[cfg(feature = "builtin.shopt")]
+	m.insert("shopt".into(), builtin::<shopt::ShoptCommand>());
+	#[cfg(feature = "builtin.dot")]
+	m.insert("source".into(), builtin::<dot::DotCommand>().special());
+	#[cfg(all(feature = "builtin.suspend", unix))]
+	m.insert("suspend".into(), builtin::<suspend::SuspendCommand>());
+	#[cfg(feature = "builtin.test")]
+	m.insert("test".into(), builtin::<test::TestCommand>());
+	#[cfg(feature = "builtin.test")]
+	m.insert("[".into(), builtin::<test::TestCommand>());
+	#[cfg(feature = "builtin.declare")]
+	m.insert("typeset".into(), decl_builtin::<declare::DeclareCommand>());
+
+	// Completion builtins
+	#[cfg(feature = "builtin.complete")]
+	m.insert("complete".into(), builtin::<complete::CompleteCommand>());
+	#[cfg(feature = "builtin.compgen")]
+	m.insert("compgen".into(), builtin::<complete::CompGenCommand>());
+	#[cfg(feature = "builtin.compopt")]
+	m.insert("compopt".into(), builtin::<complete::CompOptCommand>());
+
+	// Dir stack builtins
+	#[cfg(feature = "builtin.dirs")]
+	m.insert("dirs".into(), builtin::<dirs::DirsCommand>());
+	#[cfg(feature = "builtin.popd")]
+	m.insert("popd".into(), builtin::<popd::PopdCommand>());
+	#[cfg(feature = "builtin.pushd")]
+	m.insert("pushd".into(), builtin::<pushd::PushdCommand>());
+
+	// Input configuration builtins
+	#[cfg(feature = "builtin.bind")]
+	m.insert("bind".into(), builtin::<bind::BindCommand>());
+
+	// History
+	#[cfg(feature = "builtin.history")]
+	m.insert("history".into(), builtin::<history::HistoryCommand>());
+
+	// TODO: implement caller builtin
+	m.insert("caller".into(), builtin::<unimp::UnimplementedCommand>());
+
+	// TODO: implement disown builtin
+	m.insert("disown".into(), builtin::<unimp::UnimplementedCommand>());
+
+	// TODO: implement logout builtin
+	m.insert("logout".into(), builtin::<unimp::UnimplementedCommand>());
 }

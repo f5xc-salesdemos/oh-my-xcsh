@@ -34,26 +34,28 @@ pub(crate) struct JobsCommand {
 impl builtins::Command for JobsCommand {
 	type Error = brush_core::Error;
 
-	async fn execute(
+	fn execute(
 		&self,
 		context: brush_core::ExecutionContext<'_>,
-	) -> Result<brush_core::ExecutionResult, Self::Error> {
-		if self.also_show_pids {
-			return error::unimp("jobs -l");
-		}
-		if self.list_changed_only {
-			return error::unimp("jobs -n");
-		}
-
-		if self.job_specs.is_empty() {
-			for job in &context.shell.jobs.jobs {
-				self.display_job(&context, job)?;
+	) -> impl Future<Output = Result<brush_core::ExecutionResult, Self::Error>> {
+		futures::future::lazy(move |_| {
+			if self.also_show_pids {
+				return error::unimp("jobs -l");
 			}
-		} else {
-			return error::unimp("jobs with job specs");
-		}
+			if self.list_changed_only {
+				return error::unimp("jobs -n");
+			}
 
-		Ok(ExecutionResult::success())
+			if self.job_specs.is_empty() {
+				for job in &context.shell.jobs.jobs {
+					self.display_job(&context, job)?;
+				}
+			} else {
+				return error::unimp("jobs with job specs");
+			}
+
+			Ok(ExecutionResult::success())
+		})
 	}
 }
 

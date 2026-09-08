@@ -149,6 +149,7 @@ function batchCachePath(
 	apiToken: string,
 	namespace: string,
 	paths: string[],
+	cacheDir: string,
 ): string {
 	const identity = JSON.stringify({
 		version: BATCH_CACHE_VERSION,
@@ -158,17 +159,18 @@ function batchCachePath(
 		namespace,
 		paths: [...new Set(paths.map(value => value.trim()))].sort(),
 	});
-	return path.join(BATCH_CACHE_DIR, `v${BATCH_CACHE_VERSION}-${sha256(identity)}.json`);
+	return path.join(cacheDir, `v${BATCH_CACHE_VERSION}-${sha256(identity)}.json`);
 }
 
-async function ensurePrivateBatchCacheDir(): Promise<void> {
-	await fs.mkdir(BATCH_CACHE_DIR, { recursive: true, mode: 0o700 });
-	await fs.chmod(BATCH_CACHE_DIR, 0o700);
+async function ensurePrivateBatchCacheDir(cacheDir: string): Promise<void> {
+	await fs.mkdir(cacheDir, { recursive: true, mode: 0o700 });
+	await fs.chmod(cacheDir, 0o700);
 }
 
 async function writeBatchCacheAtomically(cachePath: string, value: unknown): Promise<void> {
-	await ensurePrivateBatchCacheDir();
-	const temporaryPath = path.join(BATCH_CACHE_DIR, `.write-${crypto.randomUUID()}`);
+	const cacheDir = path.dirname(cachePath);
+	await ensurePrivateBatchCacheDir(cacheDir);
+	const temporaryPath = path.join(cacheDir, `.write-${crypto.randomUUID()}`);
 	let handle: fs.FileHandle | undefined;
 	try {
 		handle = await fs.open(temporaryPath, "wx", 0o600);
@@ -226,7 +228,10 @@ export class XcshApiTool implements AgentTool<typeof xcshApiSchema, XcshApiToolD
 	#autoExpandPathsCache: string[] | null = null;
 	#expandedNamespaces = new Set<string>();
 
-	constructor(session: ToolSession) {
+	constructor(
+		session: ToolSession,
+		private readonly cacheDir = BATCH_CACHE_DIR,
+	) {
 		this.description = prompt.render(xcshApiDescription);
 		this.#contextEnv = createContextEnv(session.settings);
 		this.#warmTls();
@@ -400,9 +405,10 @@ export class XcshApiTool implements AgentTool<typeof xcshApiSchema, XcshApiToolD
 		// Prevents cumulative rate limiting when the benchmark runs multiple queries.
 		const ns =
 			params?.namespace ?? process.env.XCSH_NAMESPACE ?? this.#contextEnv.get("XCSH_NAMESPACE") ?? "_default";
-		const cachePath = batchCachePath(apiBase, contextName, apiToken, ns, paths);
+		const cachePath = batchCachePath(apiBase, contextName, apiToken, ns, paths, this.cacheDir);
 		try {
-			await ensurePrivateBatchCacheDir();
+			const cacheDir = path.dirname(cachePath);
+			await ensurePrivateBatchCacheDir(cacheDir);
 			const cached = JSON.parse(await fs.readFile(cachePath, "utf8")) as {
 				ts: number;
 				text: string;

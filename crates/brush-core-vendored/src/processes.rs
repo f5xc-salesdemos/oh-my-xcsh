@@ -16,7 +16,7 @@ pub struct ChildProcess {
 
 impl ChildProcess {
 	/// Wraps a child process and its future.
-	pub fn new(pid: Option<sys::process::ProcessId>, child: sys::process::Child) -> Self {
+	pub const fn new(pid: Option<sys::process::ProcessId>, child: sys::process::Child) -> Self {
 		Self { pid, child, reaped: false }
 	}
 
@@ -69,20 +69,17 @@ impl ChildProcess {
 				}
 			};
 
-			return match status {
-				Some(status) => {
-					let status = status?;
+			return if let Some(status) = status {
+				let status = status?;
+				self.reaped = true;
+				Ok(ProcessWaitResult::Completed(output_from_status(status)))
+			} else {
+				if self.child.kill().await.is_ok() {
 					self.reaped = true;
-					Ok(ProcessWaitResult::Completed(output_from_status(status)))
-				},
-				None => {
-					if self.child.kill().await.is_ok() {
-						self.reaped = true;
-					} else if let Ok(Some(_)) = self.child.try_wait() {
-						self.reaped = true;
-					}
-					Ok(ProcessWaitResult::Cancelled)
-				},
+				} else if let Ok(Some(_)) = self.child.try_wait() {
+					self.reaped = true;
+				}
+				Ok(ProcessWaitResult::Cancelled)
 			};
 		}
 	}
@@ -122,7 +119,7 @@ impl Drop for ChildProcess {
 	}
 }
 
-fn output_from_status(status: std::process::ExitStatus) -> std::process::Output {
+const fn output_from_status(status: std::process::ExitStatus) -> std::process::Output {
 	std::process::Output { status, stdout: Vec::new(), stderr: Vec::new() }
 }
 

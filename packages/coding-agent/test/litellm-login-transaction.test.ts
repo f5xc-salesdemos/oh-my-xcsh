@@ -22,14 +22,19 @@ function createPaths() {
 	};
 }
 
-function createSession(options?: { failModelApply?: boolean }) {
+function createSession(options?: { failModelApply?: boolean; failRoleApply?: boolean; selectedModel?: Model }) {
 	const previousModel = { id: "previous", provider: "previous-provider" } as Model;
-	const selectedModel = { id: "gpt-5.6-sol", provider: "litellm" } as Model;
+	const selectedModel = options?.selectedModel ?? ({ id: "gpt-5.6-sol", provider: "litellm" } as Model);
 	const refresh = vi.fn(async () => {});
 	let modelRoles: Record<string, string> = { default: "previous-provider/previous:medium", smol: "other/smol" };
+	let failRoleApply = options?.failRoleApply ?? false;
 	const settings = {
 		getModelRoles: vi.fn(() => modelRoles),
 		set: vi.fn((_key: "modelRoles", value: Record<string, string>) => {
+			if (failRoleApply) {
+				failRoleApply = false;
+				throw new Error("role persistence failed");
+			}
 			modelRoles = value;
 		}),
 	};
@@ -61,6 +66,7 @@ function createSession(options?: { failModelApply?: boolean }) {
 }
 
 const GPT = LITELLM_LOGIN_MODEL_CHOICES.find(choice => choice.modelId === "gpt-5.6-sol")!;
+const OPUS = LITELLM_LOGIN_MODEL_CHOICES.find(choice => choice.modelId === "claude-opus-5")!;
 
 describe("commitLiteLLMLogin", () => {
 	it("writes the URL-bearing profiles, refreshes, and applies the selected model", async () => {
@@ -85,6 +91,82 @@ describe("commitLiteLLMLogin", () => {
 			selector: "litellm/gpt-5.6-sol",
 			thinkingLevel: ThinkingLevel.High,
 		});
+		expect(state.getModelRoles()).toEqual({
+			smol: "litellm/gpt-5.6-luna:low",
+			default: "litellm/gpt-5.6-terra:medium",
+			slow: "litellm/gpt-5.6-sol:high",
+			plan: "litellm/gpt-5.6-sol:high",
+		});
+	});
+
+	it("removes legacy role models when applying the GPT-5.6 family", async () => {
+		const paths = createPaths();
+		const state = createSession();
+		state.settings.set("modelRoles", {
+			default: "openai/gpt-4.1-mini",
+			smol: "openai/gpt-5-nano",
+			reviewer: "openai/gpt-4.1-mini",
+		});
+
+		await commitLiteLLMLogin({
+			...paths,
+			credentials: { baseUrl: "https://litellm.example.test", apiKey: "sk-test" },
+			probe: { reachable: true, models: ["gpt-5.6-sol"], apiBasePath: "/v1" },
+			choice: GPT,
+			session: state.session,
+		});
+
+		expect(state.getModelRoles()).toEqual({
+			smol: "litellm/gpt-5.6-luna:low",
+			default: "litellm/gpt-5.6-terra:medium",
+			slow: "litellm/gpt-5.6-sol:high",
+			plan: "litellm/gpt-5.6-sol:high",
+		});
+	});
+
+	it("applies Claude family defaults without relying on the OAuth entitlement manifest", async () => {
+		const paths = createPaths();
+		const state = createSession({ selectedModel: { id: "claude-opus-5", provider: "anthropic" } as Model });
+
+		await commitLiteLLMLogin({
+			...paths,
+			credentials: { baseUrl: "https://litellm.example.test", apiKey: "sk-test" },
+			probe: { reachable: true, models: ["claude-opus-5"], apiBasePath: "/v1" },
+			choice: OPUS,
+			session: state.session,
+		});
+
+		expect(state.getModelRoles()).toEqual({
+			smol: "anthropic/claude-haiku-4-5:low",
+			default: "anthropic/claude-sonnet-5:medium",
+			slow: "anthropic/claude-opus-5:high",
+			plan: "anthropic/claude-opus-5:high",
+		});
+	});
+
+	it("removes non-Claude role models when applying the latest Claude family", async () => {
+		const paths = createPaths();
+		const state = createSession({ selectedModel: { id: "claude-opus-5", provider: "anthropic" } as Model });
+		state.settings.set("modelRoles", {
+			default: "openai/gpt-4.1-mini",
+			smol: "openai/gpt-5-nano",
+			reviewer: "openai/gpt-4.1-mini",
+		});
+
+		await commitLiteLLMLogin({
+			...paths,
+			credentials: { baseUrl: "https://litellm.example.test", apiKey: "sk-test" },
+			probe: { reachable: true, models: ["claude-opus-5"], apiBasePath: "/v1" },
+			choice: OPUS,
+			session: state.session,
+		});
+
+		expect(state.getModelRoles()).toEqual({
+			smol: "anthropic/claude-haiku-4-5:low",
+			default: "anthropic/claude-sonnet-5:medium",
+			slow: "anthropic/claude-opus-5:high",
+			plan: "anthropic/claude-opus-5:high",
+		});
 	});
 
 	it("restores both files and the prior active model when apply fails", async () => {
@@ -108,6 +190,30 @@ describe("commitLiteLLMLogin", () => {
 		expect(fs.readFileSync(paths.modelsPath, "utf8")).toBe(previousModels);
 		expect(fs.readFileSync(paths.configPath, "utf8")).toBe(previousConfig);
 		expect(state.refresh).toHaveBeenCalledTimes(2);
+		expect(state.setModelTemporary).toHaveBeenCalledWith(state.previousModel, ThinkingLevel.Medium);
+		expect(state.getModelRoles()).toEqual({ default: "previous-provider/previous:medium", smol: "other/smol" });
+	});
+
+	it("restores the selected model and roles when family-default persistence fails", async () => {
+		const paths = createPaths();
+		const previousModels = "previous models\n";
+		const previousConfig = "previous config\n";
+		fs.writeFileSync(paths.modelsPath, previousModels);
+		fs.writeFileSync(paths.configPath, previousConfig);
+		const state = createSession({ failRoleApply: true });
+
+		await expect(
+			commitLiteLLMLogin({
+				...paths,
+				credentials: { baseUrl: "https://litellm.example.test", apiKey: "sk-test" },
+				probe: { reachable: true, models: ["gpt-5.6-sol"], apiBasePath: "/v1" },
+				choice: GPT,
+				session: state.session,
+			}),
+		).rejects.toThrow("role persistence failed");
+
+		expect(fs.readFileSync(paths.modelsPath, "utf8")).toBe(previousModels);
+		expect(fs.readFileSync(paths.configPath, "utf8")).toBe(previousConfig);
 		expect(state.setModelTemporary).toHaveBeenCalledWith(state.previousModel, ThinkingLevel.Medium);
 		expect(state.getModelRoles()).toEqual({ default: "previous-provider/previous:medium", smol: "other/smol" });
 	});

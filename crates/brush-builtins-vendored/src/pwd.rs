@@ -17,24 +17,26 @@ pub(crate) struct PwdCommand {
 impl builtins::Command for PwdCommand {
 	type Error = brush_core::Error;
 
-	async fn execute(
+	fn execute(
 		&self,
 		context: brush_core::ExecutionContext<'_>,
-	) -> Result<brush_core::ExecutionResult, Self::Error> {
-		let mut cwd: Cow<'_, Path> = context.shell.working_dir().into();
+	) -> impl Future<Output = Result<brush_core::ExecutionResult, Self::Error>> {
+		futures::future::lazy(move |_| {
+			let mut cwd: Cow<'_, Path> = context.shell.working_dir().into();
 
-		let should_canonicalize = self.physical
-			|| context
-				.shell
-				.options
-				.do_not_resolve_symlinks_when_changing_dir;
+			let should_canonicalize = self.physical
+				|| context
+					.shell
+					.options
+					.do_not_resolve_symlinks_when_changing_dir;
 
-		if should_canonicalize {
-			cwd = cwd.canonicalize()?.into();
-		}
+			if should_canonicalize {
+				cwd = cwd.canonicalize()?.into();
+			}
 
-		writeln!(context.stdout(), "{}", cwd.to_string_lossy())?;
+			writeln!(context.stdout(), "{}", cwd.to_string_lossy())?;
 
-		Ok(ExecutionResult::success())
+			Ok(ExecutionResult::success())
+		})
 	}
 }

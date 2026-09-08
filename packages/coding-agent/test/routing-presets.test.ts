@@ -8,6 +8,10 @@ import { AuthStorage } from "../src/session/auth-storage";
 describe("Routing Presets (R03)", () => {
 	it("should contain standard reviewed presets for OpenAI, Anthropic, and LiteLLM", () => {
 		expect(BUILTIN_ROUTING_PRESETS["openai/gpt-5.6"]).toBeDefined();
+		expect(BUILTIN_ROUTING_PRESETS["openai/gpt-5.6"]).toMatchObject({
+			provider: "openai",
+			tiers: { utility: "gpt-5.6-luna", balanced: "gpt-5.6-terra", frontier: "gpt-5.6-sol" },
+		});
 		expect(BUILTIN_ROUTING_PRESETS["anthropic/claude"]).toBeDefined();
 		expect(BUILTIN_ROUTING_PRESETS["anthropic/claude"]).toMatchObject({
 			tiers: { utility: "claude-haiku-4-5", balanced: "claude-sonnet-5", frontier: "claude-opus-5" },
@@ -17,7 +21,14 @@ describe("Routing Presets (R03)", () => {
 			},
 		});
 		expect(BUILTIN_ROUTING_PRESETS["litellm/openai"]).toBeDefined();
-		expect(BUILTIN_ROUTING_PRESETS["litellm/anthropic"]).toBeDefined();
+		expect(BUILTIN_ROUTING_PRESETS["litellm/openai"]).toMatchObject({
+			provider: "litellm",
+			tiers: { utility: "gpt-5.6-luna", balanced: "gpt-5.6-terra", frontier: "gpt-5.6-sol" },
+		});
+		expect(BUILTIN_ROUTING_PRESETS["litellm/anthropic"]).toMatchObject({
+			provider: "litellm",
+			tiers: { utility: "claude-haiku-4-5", balanced: "claude-sonnet-5", frontier: "claude-opus-5" },
+		});
 		expect(BUILTIN_ROUTING_PRESETS["openai-codex/gpt-5.6"]).toMatchObject({
 			provider: "openai-codex",
 			tiers: { utility: "gpt-5.6-luna", balanced: "gpt-5.6-terra", frontier: "gpt-5.6-sol" },
@@ -31,8 +42,8 @@ describe("Routing Presets (R03)", () => {
 		const available = registry.getAll().map(m => `${m.provider}/${m.id}`);
 
 		for (const pool of Object.values(BUILTIN_ROUTING_PRESETS)) {
-			// OAuth subscription models are entitlement-discovered and intentionally need not exist in the bundle.
-			if (pool.provider === "openai-codex") continue;
+			// Provider-discovered and subscription models intentionally need not exist in the static bundle.
+			if (pool.provider === "openai" || pool.provider === "openai-codex" || pool.provider === "litellm") continue;
 			const p = pool.provider ? `${pool.provider}/` : "";
 			expect(available).toContain(`${p}${pool.tiers.utility}`);
 			expect(available).toContain(`${p}${pool.tiers.balanced}`);
@@ -43,19 +54,19 @@ describe("Routing Presets (R03)", () => {
 	it("should resolve pool from explicit selector or anchor model", () => {
 		const openaiPool = resolveModelPool("openai/gpt-5.6", {});
 		expect(openaiPool).toBeDefined();
-		expect(openaiPool?.tiers.utility).toBe("gpt-5.4-mini");
-		expect(openaiPool?.tiers.balanced).toBe("gpt-5.4");
+		expect(openaiPool?.tiers.utility).toBe("gpt-5.6-luna");
+		expect(openaiPool?.tiers.balanced).toBe("gpt-5.6-terra");
 		expect(openaiPool?.tiers.frontier).toBe("gpt-5.6-sol");
 
 		const litellmOpenaiPool = resolveModelPool("litellm/openai", {});
 		expect(litellmOpenaiPool).toBeDefined();
-		expect(litellmOpenaiPool?.tiers.utility).toBe("gpt-5.4-mini");
-		expect(litellmOpenaiPool?.tiers.balanced).toBe("gpt-5.4");
+		expect(litellmOpenaiPool?.tiers.utility).toBe("gpt-5.6-luna");
+		expect(litellmOpenaiPool?.tiers.balanced).toBe("gpt-5.6-terra");
 		expect(litellmOpenaiPool?.tiers.frontier).toBe("gpt-5.6-sol");
 	});
 
 	it("should NOT cross provider families when anchor model has explicit provider prefix", () => {
-		const litellmClaudePool = resolveModelPool("litellm/claude-3-5-sonnet-20241022", {});
+		const litellmClaudePool = resolveModelPool("litellm/claude-sonnet-5", {});
 		expect(litellmClaudePool).toBeDefined();
 		expect(litellmClaudePool?.id).toBe("litellm/anthropic");
 		expect(litellmClaudePool?.provider).toBe("litellm");
@@ -105,7 +116,7 @@ describe("Routing Presets (R03)", () => {
 			},
 		};
 		// Disabled custom pool -> falls back to builtin
-		const disabledCustom = resolveModelPool("openai/gpt-5.4", customPools, ["my-openai"]);
+		const disabledCustom = resolveModelPool("openai/gpt-5.6-luna", customPools, ["my-openai"]);
 		expect(disabledCustom?.id).toBe("openai/gpt-5.6");
 
 		// Disabled builtin pool -> falls back to undefined

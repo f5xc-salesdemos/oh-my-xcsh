@@ -47,7 +47,7 @@ function realTmp(suffix: string): string {
 }
 
 describe("buildContainmentFence", () => {
-	it("denies sibling-customer access in Seatbelt while preserving the portable discovery policy", () => {
+	it("denies parent enumeration while preserving named sibling access on Seatbelt", () => {
 		const home = realTmp("home");
 		const workspace = path.join(home, "GIT", "custA");
 		fs.mkdirSync(workspace, { recursive: true });
@@ -57,19 +57,19 @@ describe("buildContainmentFence", () => {
 		expect(fence.deny).not.toContain(home);
 		expect(fence.deny).not.toContain(path.join(home, "GIT"));
 		expect(fence.denyEnumerate).toContain(path.join(home, "GIT"));
-		expect(fence.denyOnSeatbelt).toContain(path.join(home, "GIT"));
+		expect(fence.denyOnSeatbelt).not.toContain(path.join(home, "GIT"));
 		expect(fence.allow).toContain(workspace);
 		expect(fenceVerdict(fence, path.join(home, "GIT"), "enumerate")).toBe("deny");
 		expect(fenceVerdict(fence, path.join(home, "GIT", "custB", "secret"), "read")).toBe("allow");
 		expect(fenceVerdict(fence, path.join(home, "GIT", "custB", "secret"), "write")).toBe("allow");
-		expect(seatbeltFenceVerdict(fence, path.join(home, "GIT", "custB", "secret"), "read")).toBe("deny");
+		expect(seatbeltFenceVerdict(fence, path.join(home, "GIT", "custB", "secret"), "read")).toBe("allow");
 		expect(fenceVerdict(fence, path.join(workspace, "notes.md"), "read")).toBe("allow");
 		expect(seatbeltFenceVerdict(fence, path.join(workspace, "notes.md"), "read")).toBe("allow");
 		expect(fenceVerdict(fence, path.join(workspace, "notes.md"), "write")).toBe("allow");
 		expect(fenceVerdict(fence, workspace, "enumerate")).toBe("allow");
 	});
 
-	it("keeps an explicit trusted sibling grant deeper than the Seatbelt customer-container deny", () => {
+	it("keeps explicit trusted roots without synthesizing a recursive Seatbelt deny", () => {
 		const home = realTmp("seatbelt-trusted-grant");
 		const parent = path.join(home, "customers");
 		const workspace = path.join(parent, "example-a");
@@ -79,11 +79,24 @@ describe("buildContainmentFence", () => {
 
 		const fence = buildContainmentFence({ workspace, home, extraRoots: [trusted] });
 
-		expect(fence.denyOnSeatbelt).toContain(parent);
+		expect(fence.denyOnSeatbelt).not.toContain(parent);
 		expect(fence.allow).toContain(workspace);
 		expect(fence.allow).toContain(trusted);
 		expect(seatbeltFenceVerdict(fence, path.join(trusted, "handoff.txt"), "read")).toBe("allow");
-		expect(seatbeltFenceVerdict(fence, path.join(parent, "example-b", "secret.txt"), "read")).toBe("deny");
+		expect(seatbeltFenceVerdict(fence, path.join(parent, "example-b", "secret.txt"), "read")).toBe("allow");
+	});
+
+	it("retains the low-level recursive Seatbelt deny for specialized fences", () => {
+		const home = realTmp("explicit-seatbelt");
+		const parent = path.join(home, "customers");
+		const workspace = path.join(parent, "example-a");
+		fs.mkdirSync(workspace, { recursive: true });
+
+		const fence = buildContainmentFence({ workspace, home });
+		const specialized = { ...fence, denyOnSeatbelt: [parent] };
+
+		expect(seatbeltFenceVerdict(specialized, path.join(parent, "example-b", "secret.txt"), "read")).toBe("deny");
+		expect(seatbeltFenceVerdict(specialized, path.join(workspace, "notes.md"), "read")).toBe("allow");
 	});
 
 	it("leaves everything outside home alone — nothing operational is restricted", () => {

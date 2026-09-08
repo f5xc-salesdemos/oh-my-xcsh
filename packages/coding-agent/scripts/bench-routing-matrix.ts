@@ -79,7 +79,7 @@ export const LANE_CAPABILITIES: Record<string, LaneCapability> = {
 		multimodal: true,
 		requireResponseModel: true,
 		canProveUpstreamProvider: true,
-		tiers: { utility: "gpt-5.4-mini", balanced: "gpt-5.4", frontier: "gpt-5.6-sol" },
+		tiers: { utility: "gpt-5.6-luna", balanced: "gpt-5.6-terra", frontier: "gpt-5.6-sol" },
 	},
 	anthropic: {
 		id: "anthropic",
@@ -96,9 +96,9 @@ export const LANE_CAPABILITIES: Record<string, LaneCapability> = {
 		requireResponseModel: true,
 		canProveUpstreamProvider: true,
 		tiers: {
-			utility: "claude-3-haiku-20240307",
-			balanced: "claude-3-5-sonnet-20241022",
-			frontier: "claude-opus-4-0",
+			utility: "claude-haiku-4-5",
+			balanced: "claude-sonnet-5",
+			frontier: "claude-opus-5",
 		},
 	},
 	"litellm-openai": {
@@ -114,7 +114,7 @@ export const LANE_CAPABILITIES: Record<string, LaneCapability> = {
 		multimodal: true,
 		requireResponseModel: true,
 		canProveUpstreamProvider: false,
-		tiers: { utility: "gpt-5.4-mini", balanced: "gpt-5.4", frontier: "gpt-5.6-sol" },
+		tiers: { utility: "gpt-5.6-luna", balanced: "gpt-5.6-terra", frontier: "gpt-5.6-sol" },
 	},
 	"litellm-anthropic": {
 		id: "litellm-anthropic",
@@ -130,9 +130,9 @@ export const LANE_CAPABILITIES: Record<string, LaneCapability> = {
 		requireResponseModel: true,
 		canProveUpstreamProvider: false,
 		tiers: {
-			utility: "claude-3-5-haiku-20241022",
-			balanced: "claude-3-5-sonnet-20241022",
-			frontier: "claude-opus-4-0",
+			utility: "claude-haiku-4-5",
+			balanced: "claude-sonnet-5",
+			frontier: "claude-opus-5",
 		},
 	},
 	"google-vertex": {

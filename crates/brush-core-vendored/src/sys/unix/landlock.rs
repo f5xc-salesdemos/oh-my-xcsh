@@ -34,6 +34,7 @@
 //! for a confined child.
 
 use std::io;
+use std::os::fd::FromRawFd;
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -113,7 +114,7 @@ pub enum Unavailable {
 impl Unavailable {
 	/// A short reason, for reporting the active backend to the operator.
 	#[must_use]
-	pub fn reason(self) -> &'static str {
+	pub const fn reason(self) -> &'static str {
 		match self {
 			Self::SyscallMissing => "kernel does not provide Landlock (needs 5.13 or newer)",
 			Self::DisabledAtBoot => "Landlock is not enabled in this kernel's LSM list",
@@ -289,8 +290,6 @@ fn components_are_link_free(path: &Path) -> Option<bool> {
 /// dangling symlink, and a plan may name a cache directory that does not exist yet. Skipping is the
 /// fail-closed direction, because an ungranted path stays denied.
 pub fn build_ruleset(plan: &GrantPlan, abi: u32, creatable: &[PathBuf]) -> io::Result<OwnedFd> {
-	use std::os::fd::FromRawFd;
-
 	let attr = RulesetAttr { handled_access_fs: handled_rights(abi) };
 	// SAFETY: `attr` is a live `#[repr(C)]` value and the size passed is its real size, which is how
 	// the kernel selects the layout it reads. The call only creates a ruleset fd.
@@ -457,7 +456,6 @@ fn open_path(path: &Path) -> Option<OwnedFd> {
 	if raw < 0 {
 		return None;
 	}
-	use std::os::fd::FromRawFd;
 	// SAFETY: `raw` was just returned by `open` as a fresh, owned descriptor.
 	Some(unsafe { OwnedFd::from_raw_fd(raw) })
 }

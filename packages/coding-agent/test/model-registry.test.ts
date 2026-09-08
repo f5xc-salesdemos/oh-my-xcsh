@@ -357,25 +357,26 @@ describe("ModelRegistry", () => {
 			expect(fallback.some(variant => variant.selector === "demo/anthropic/claude-sonnet-4.5")).toBe(true);
 		});
 
-		test("resolves canonical models using configured provider order", async () => {
-			await Settings.init({
-				inMemory: true,
-				overrides: {
-					modelProviderOrder: ["demo", "anthropic"],
-				},
-			});
+		test("resolves interleaved registries using their owning provider order", () => {
 			writeRawModelsJson({
 				demo: providerConfig("https://demo.example.com/v1", [{ id: "anthropic/claude-sonnet-4.5" }]),
 			});
-
-			const registry = new ModelRegistry(authStorage, modelsJsonPath);
-			const resolved = registry.resolveCanonicalModel("claude-sonnet-4-5", {
-				availableOnly: false,
-				candidates: registry.getAll(),
+			let order = ["demo", "anthropic"];
+			const first = new ModelRegistry(authStorage, modelsJsonPath, { getProviderOrder: () => order });
+			const second = new ModelRegistry(authStorage, modelsJsonPath, {
+				getProviderOrder: () => ["anthropic", "demo"],
 			});
-
-			expect(resolved?.provider).toBe("demo");
-			expect(resolved?.id).toBe("anthropic/claude-sonnet-4.5");
+			const resolve = (registry: ModelRegistry) =>
+				registry.resolveCanonicalModel("claude-sonnet-4-5", {
+					availableOnly: false,
+					candidates: registry.getAll(),
+				});
+			for (let index = 0; index < 3; index++) {
+				expect(resolve(first)?.provider).toBe("demo");
+				expect(resolve(second)?.provider).toBe("anthropic");
+			}
+			order = ["anthropic", "demo"];
+			expect(resolve(first)?.provider).toBe("anthropic");
 		});
 	});
 

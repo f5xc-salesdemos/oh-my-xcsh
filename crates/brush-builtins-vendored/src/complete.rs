@@ -222,28 +222,30 @@ pub(crate) struct CompleteCommand {
 impl builtins::Command for CompleteCommand {
 	type Error = brush_core::Error;
 
-	async fn execute(
+	fn execute(
 		&self,
 		mut context: brush_core::ExecutionContext<'_>,
-	) -> Result<brush_core::ExecutionResult, Self::Error> {
-		let mut result = ExecutionResult::success();
+	) -> impl Future<Output = Result<brush_core::ExecutionResult, Self::Error>> {
+		futures::future::lazy(move |_| {
+			let mut result = ExecutionResult::success();
 
-		// If -D, -E, or -I are specified, then any names provided are ignored.
-		if self.use_as_default
-			|| self.use_for_empty_line
-			|| self.use_for_initial_word
-			|| self.names.is_empty()
-		{
-			self.process_global(&mut context)?;
-		} else {
-			for name in &self.names {
-				if !self.try_process_for_command(&mut context, name.as_str())? {
-					result = ExecutionResult::general_error();
+			// If -D, -E, or -I are specified, then any names provided are ignored.
+			if self.use_as_default
+				|| self.use_for_empty_line
+				|| self.use_for_initial_word
+				|| self.names.is_empty()
+			{
+				self.process_global(&mut context)?;
+			} else {
+				for name in &self.names {
+					if !self.try_process_for_command(&mut context, name.as_str())? {
+						result = ExecutionResult::general_error();
+					}
 				}
 			}
-		}
 
-		Ok(result)
+			Ok(result)
+		})
 	}
 }
 
@@ -548,65 +550,67 @@ pub(crate) struct CompOptCommand {
 impl builtins::Command for CompOptCommand {
 	type Error = brush_core::Error;
 
-	async fn execute(
+	fn execute(
 		&self,
 		context: brush_core::ExecutionContext<'_>,
-	) -> Result<brush_core::ExecutionResult, Self::Error> {
-		let mut options = HashMap::new();
-		for option in &self.disabled_options {
-			options.insert(option.clone(), false);
-		}
-		for option in &self.enabled_options {
-			options.insert(option.clone(), true);
-		}
-
-		if !self.names.is_empty() {
-			if self.update_default || self.update_empty || self.update_initial_word {
-				writeln!(context.stderr(), "compopt: cannot specify names with -D, -E, or -I")?;
-				return Ok(ExecutionExitCode::InvalidUsage.into());
+	) -> impl Future<Output = Result<brush_core::ExecutionResult, Self::Error>> {
+		futures::future::lazy(move |_| {
+			let mut options = HashMap::new();
+			for option in &self.disabled_options {
+				options.insert(option.clone(), false);
+			}
+			for option in &self.enabled_options {
+				options.insert(option.clone(), true);
 			}
 
-			for name in &self.names {
-				let spec = context.shell.completion_config.get_or_add_mut(name);
-				Self::set_options_for_spec(spec, &options);
-			}
-		} else if self.update_default {
-			if let Some(spec) = &mut context.shell.completion_config.default {
-				Self::set_options_for_spec(spec, &options);
-			} else {
-				let mut spec = Spec::default();
-				Self::set_options_for_spec(&mut spec, &options);
-				context.shell.completion_config.default = Some(spec);
-			}
-		} else if self.update_empty {
-			if let Some(spec) = &mut context.shell.completion_config.empty_line {
-				Self::set_options_for_spec(spec, &options);
-			} else {
-				let mut spec = Spec::default();
-				Self::set_options_for_spec(&mut spec, &options);
-				context.shell.completion_config.empty_line = Some(spec);
-			}
-		} else if self.update_initial_word {
-			if let Some(spec) = &mut context.shell.completion_config.initial_word {
-				Self::set_options_for_spec(spec, &options);
-			} else {
-				let mut spec = Spec::default();
-				Self::set_options_for_spec(&mut spec, &options);
-				context.shell.completion_config.initial_word = Some(spec);
-			}
-		} else {
-			// If we got here, then we need to apply to any completion actively in-flight.
-			if let Some(in_flight_options) = context
-				.shell
-				.completion_config
-				.current_completion_options
-				.as_mut()
-			{
-				Self::set_options(in_flight_options, &options);
-			}
-		}
+			if !self.names.is_empty() {
+				if self.update_default || self.update_empty || self.update_initial_word {
+					writeln!(context.stderr(), "compopt: cannot specify names with -D, -E, or -I")?;
+					return Ok(ExecutionExitCode::InvalidUsage.into());
+				}
 
-		Ok(ExecutionResult::success())
+				for name in &self.names {
+					let spec = context.shell.completion_config.get_or_add_mut(name);
+					Self::set_options_for_spec(spec, &options);
+				}
+			} else if self.update_default {
+				if let Some(spec) = &mut context.shell.completion_config.default {
+					Self::set_options_for_spec(spec, &options);
+				} else {
+					let mut spec = Spec::default();
+					Self::set_options_for_spec(&mut spec, &options);
+					context.shell.completion_config.default = Some(spec);
+				}
+			} else if self.update_empty {
+				if let Some(spec) = &mut context.shell.completion_config.empty_line {
+					Self::set_options_for_spec(spec, &options);
+				} else {
+					let mut spec = Spec::default();
+					Self::set_options_for_spec(&mut spec, &options);
+					context.shell.completion_config.empty_line = Some(spec);
+				}
+			} else if self.update_initial_word {
+				if let Some(spec) = &mut context.shell.completion_config.initial_word {
+					Self::set_options_for_spec(spec, &options);
+				} else {
+					let mut spec = Spec::default();
+					Self::set_options_for_spec(&mut spec, &options);
+					context.shell.completion_config.initial_word = Some(spec);
+				}
+			} else {
+				// If we got here, then we need to apply to any completion actively in-flight.
+				if let Some(in_flight_options) = context
+					.shell
+					.completion_config
+					.current_completion_options
+					.as_mut()
+				{
+					Self::set_options(in_flight_options, &options);
+				}
+			}
+
+			Ok(ExecutionResult::success())
+		})
 	}
 }
 

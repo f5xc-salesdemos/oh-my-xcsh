@@ -1,6 +1,6 @@
 import * as os from "node:os";
 import * as path from "node:path";
-import { ThinkingLevel } from "@f5-sales-demo/pi-agent-core";
+import type { ThinkingLevel } from "@f5-sales-demo/pi-agent-core";
 import {
 	getOAuthProviders,
 	getOpenAICodexLoginMethods,
@@ -13,8 +13,6 @@ import { Loader, Spacer, Text } from "@f5-sales-demo/pi-tui";
 import { getAgentDbPath, getAgentDir, getConfigDirName, getProjectDir } from "@f5-sales-demo/pi-utils";
 import { invalidate as invalidateFsCache } from "../../capability/fs";
 import { probeLiteLLMConnection, readLiteLLMConfig } from "../../config/auto-config";
-import { getRoleInfo } from "../../config/model-registry";
-import { formatModelSelectorValue } from "../../config/model-resolver";
 import { settings } from "../../config/settings";
 import {
 	DEFAULT_VLLM_BASE_URL,
@@ -90,6 +88,7 @@ import {
 	type LiteLLMLoginModelChoice,
 	type LoginModelChoice,
 } from "./login-model";
+import { applyModelSelection } from "./model-selection";
 import {
 	defaultVertexLoginRuntime,
 	detectVertexProject,
@@ -564,49 +563,32 @@ export class SelectorController {
 				this.ctx.settings,
 				this.ctx.session.modelRegistry,
 				this.ctx.session.scopedModels,
-				async (model, role, thinkingLevel, selector) => {
-					try {
-						if (role === null) {
-							// Temporary: update agent state but don't persist to settings
-							await this.ctx.session.setModelTemporary(model, thinkingLevel);
-							this.ctx.statusLine.invalidate();
-							this.ctx.updateEditorBorderColor();
-							this.ctx.showStatus(`Temporary model: ${selector ?? model.id}`);
-							done();
-							this.ctx.ui.requestRender();
-						} else if (role === "default") {
-							// Default: update agent state and persist
-							await this.ctx.session.setModel(model, role, {
-								selector,
-								thinkingLevel,
-							});
-							if (thinkingLevel && thinkingLevel !== ThinkingLevel.Inherit) {
-								this.ctx.session.setThinkingLevel(thinkingLevel);
-							}
-							this.ctx.statusLine.invalidate();
-							this.ctx.updateEditorBorderColor();
-							this.ctx.showStatus(`Default model: ${selector ?? model.id}`);
-							done();
-						} else {
-							// Other roles (smol, slow): just update settings, not current model
-							this.ctx.settings.setModelRole(
-								role,
-								formatModelSelectorValue(selector ?? `${model.provider}/${model.id}`, thinkingLevel),
-							);
-							const roleInfo = getRoleInfo(role, settings);
-							const roleLabel = roleInfo?.name ?? role;
-							this.ctx.showStatus(`${roleLabel} model: ${selector ?? model.id}`);
-							// Don't call done() - selector stays open
-						}
-					} catch (error) {
-						this.ctx.showError(error instanceof Error ? error.message : String(error));
-					}
+				async selection => {
+					await applyModelSelection(this.ctx.session, selection);
+					this.ctx.statusLine.invalidate();
+					this.ctx.updateEditorBorderColor();
+					const scope =
+						selection.scope === "conversation"
+							? "This conversation"
+							: selection.scope === "default"
+								? "Saved default"
+								: `Role ${selection.role}`;
+					this.ctx.showStatus(`${scope}: ${selection.selector} · reasoning ${selection.thinkingLevel}`);
+					if (selection.scope !== "role") done();
+					this.ctx.ui.requestRender();
 				},
 				() => {
 					done();
 					this.ctx.ui.requestRender();
 				},
-				options,
+				{
+					...options,
+					currentThinkingLevel: this.ctx.session.thinkingLevel,
+					onLogin: () => {
+						done();
+						void this.showOAuthSelector("login");
+					},
+				},
 			);
 			return { component: selector, focus: selector };
 		});

@@ -114,3 +114,47 @@ describe("isRustAffectingPath — paths that must not slip through", () => {
 		}
 	});
 });
+
+describe("Rust manifest discovery", () => {
+	it("covers excluded standalone crates and deduplicates workspace members", async () => {
+		const { mkdtemp, mkdir, writeFile, rm } = await import("node:fs/promises");
+		const { tmpdir } = await import("node:os");
+		const { join } = await import("node:path");
+		const { discoverRustManifests } = await import("../../../../scripts/run-rs-task");
+		const root = await mkdtemp(join(tmpdir(), "xcsh-rust-discovery-"));
+		try {
+			await writeFile(
+				join(root, "Cargo.toml"),
+				'[workspace]\nmembers = ["member"]\nexclude = ["vendor"]\nresolver = "3"\n',
+			);
+			for (const name of ["member", "vendor", "obsolete"]) {
+				await mkdir(join(root, name, "src"), { recursive: true });
+				await writeFile(join(root, name, "src/lib.rs"), "pub fn fixture() {}\n");
+				await writeFile(
+					join(root, name, "Cargo.toml"),
+					`[package]\nname = "${name}"\nversion = "0.1.0"\nedition = "2024"\n${name !== "member" ? "[workspace]\n" : ""}`,
+				);
+			}
+			const git = (...args: string[]) => {
+				const result = Bun.spawnSync(["git", ...args], { cwd: root });
+				expect(result.exitCode).toBe(0);
+			};
+			git("init", "--quiet");
+			git("add", ".");
+			await rm(join(root, "obsolete"), { recursive: true });
+			await mkdir(join(root, "new-crate/src"), { recursive: true });
+			await writeFile(join(root, "new-crate/src/lib.rs"), "pub fn fixture() {}\n");
+			await writeFile(
+				join(root, "new-crate/Cargo.toml"),
+				'[package]\nname = "new-crate"\nversion = "0.1.0"\nedition = "2024"\n[workspace]\n',
+			);
+			expect(await discoverRustManifests(root)).toEqual([
+				join(root, "Cargo.toml"),
+				join(root, "new-crate/Cargo.toml"),
+				join(root, "vendor/Cargo.toml"),
+			]);
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+});

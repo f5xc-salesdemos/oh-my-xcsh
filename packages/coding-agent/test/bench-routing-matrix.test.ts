@@ -63,6 +63,23 @@ describe("routing matrix capability and scenario contract", () => {
 		expect(rows).toHaveLength(60);
 	});
 
+	it("uses only the reviewed flagship OpenAI and Anthropic tiers", () => {
+		for (const laneId of ["openai", "litellm-openai"]) {
+			expect(LANE_CAPABILITIES[laneId].tiers).toEqual({
+				utility: "gpt-5.6-luna",
+				balanced: "gpt-5.6-terra",
+				frontier: "gpt-5.6-sol",
+			});
+		}
+		for (const laneId of ["anthropic", "litellm-anthropic"]) {
+			expect(LANE_CAPABILITIES[laneId].tiers).toEqual({
+				utility: "claude-haiku-4-5",
+				balanced: "claude-sonnet-5",
+				frontier: "claude-opus-5",
+			});
+		}
+	});
+
 	it("maps subscription tiers to the reviewed models and reasoning levels", () => {
 		expect(LANE_CAPABILITIES["google-antigravity"]).toMatchObject({
 			tiers: {
@@ -196,7 +213,7 @@ describe("provider-specific authenticated inventory", () => {
 			{ apiKey: "openai-secret", authMechanism: "bearer", baseUrl: "https://openai.example/v1" },
 			async (input, init) => {
 				request = capturedRequest(input, init);
-				return response({ data: [{ id: "gpt-5.4-mini" }, { id: "gpt-5.4" }, { id: "gpt-5.6-sol" }] });
+				return response({ data: [{ id: "gpt-5.6-luna" }, { id: "gpt-5.6-terra" }, { id: "gpt-5.6-sol" }] });
 			},
 		);
 		expect(result.state).toBe("AVAILABLE");
@@ -215,7 +232,7 @@ describe("provider-specific authenticated inventory", () => {
 				{ ...credential, baseUrl: "https://anthropic.example/v1" },
 				async (input, init) => {
 					request = capturedRequest(input, init);
-					return response({ data: [{ id: "claude-3-haiku-20240307" }] });
+					return response({ data: [{ id: "claude-haiku-4-5" }] });
 				},
 			);
 			expect(result.state).toBe("AVAILABLE");
@@ -235,8 +252,8 @@ describe("provider-specific authenticated inventory", () => {
 			const url = capturedRequest(input).url;
 			seen.push(url);
 			return url.includes("openai-gateway")
-				? response({ data: [{ id: "gpt-5.4-mini" }] })
-				: response({ data: [{ id: "claude-3-5-haiku-20241022" }] });
+				? response({ data: [{ id: "gpt-5.6-luna" }] })
+				: response({ data: [{ id: "claude-haiku-4-5" }] });
 		};
 		const openai = await discoverLaneInventory(
 			LANE_CAPABILITIES["litellm-openai"],
@@ -248,8 +265,8 @@ describe("provider-specific authenticated inventory", () => {
 			{ apiKey: "secret", authMechanism: "bearer", baseUrl: "https://anthropic-gateway/v1" },
 			fetchMock,
 		);
-		expect(openai.models).toEqual(["gpt-5.4-mini"]);
-		expect(anthropic.models).toEqual(["claude-3-5-haiku-20241022"]);
+		expect(openai.models).toEqual(["gpt-5.6-luna"]);
+		expect(anthropic.models).toEqual(["claude-haiku-4-5"]);
 		expect(new Set(seen).size).toBe(2);
 	});
 
@@ -324,12 +341,16 @@ describe("provider-specific authenticated inventory", () => {
 describe("inventory reconciliation and evidence", () => {
 	it("requires every configured tier and returns lane-local qualified candidates", () => {
 		const capability = LANE_CAPABILITIES["litellm-openai"];
-		const missing = reconcileLaneInventory(capability, ["gpt-5.4-mini", "gpt-5.4"]);
+		const missing = reconcileLaneInventory(capability, ["gpt-5.6-luna", "gpt-5.6-terra"]);
 		expect(missing.state).toBe("FAIL_MISSING_TIERS");
 		expect(missing.missingTiers).toEqual(["gpt-5.6-sol"]);
-		const complete = reconcileLaneInventory(capability, ["gpt-5.4-mini", "gpt-5.4", "gpt-5.6-sol"]);
+		const complete = reconcileLaneInventory(capability, ["gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol"]);
 		expect(complete.state).toBe("AVAILABLE");
-		expect(complete.eligibleCandidates).toEqual(["litellm/gpt-5.4-mini", "litellm/gpt-5.4", "litellm/gpt-5.6-sol"]);
+		expect(complete.eligibleCandidates).toEqual([
+			"litellm/gpt-5.6-luna",
+			"litellm/gpt-5.6-terra",
+			"litellm/gpt-5.6-sol",
+		]);
 	});
 
 	it("extracts text deterministically and rejects unexpected blocks", () => {
@@ -350,7 +371,7 @@ describe("inventory reconciliation and evidence", () => {
 		const missing = classifyMeasuredRun({
 			effectiveTier: "utility",
 			expectedTier: "utility",
-			requestedModel: "openai/gpt-5.4-mini",
+			requestedModel: "openai/gpt-5.6-luna",
 			responseModel: undefined,
 			clientProvider: "openai",
 			expectedClientProvider: "openai",

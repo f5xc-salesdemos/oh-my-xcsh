@@ -1490,6 +1490,7 @@ impl Shell {
 	/// # Arguments
 	///
 	/// * `target_dir` - The path to set as the working directory.
+	///
 	/// Change the working directory on behalf of the *shell* — `cd`, `pushd`, `popd`.
 	///
 	/// Separate from [`Shell::set_working_dir`] because the host also sets the working directory, per

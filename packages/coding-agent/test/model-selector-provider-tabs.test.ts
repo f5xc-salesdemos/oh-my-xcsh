@@ -78,7 +78,7 @@ describe("authenticated provider model groups", () => {
 		expect(groups[0]?.models.map(item => item.selector)).toEqual(["openai-codex/gpt-5.5"]);
 	});
 
-	it("admits successful and cached authenticated catalogs, rejects failures, and separates local runtimes", () => {
+	it("admits successful and cached authenticated catalogs, retains failures, and separates local runtimes", () => {
 		const models = [
 			model("openai-codex", "gpt-5.6-sol"),
 			model("google-vertex", "gemini-3.8-flash"),
@@ -103,13 +103,13 @@ describe("authenticated provider model groups", () => {
 			"google-vertex",
 			provider => provider !== "google-antigravity",
 		);
-		expect(groups.map(group => group.id)).toEqual(["google-vertex", "openai-codex", "local-providers"]);
+		expect(groups.map(group => group.id)).toEqual(["google-vertex", "anthropic", "openai-codex", "local-providers"]);
 		expect(groups[0]?.label).toBe("Google Vertex");
 		expect(groups[0]?.stale).toBe(true);
-		expect(groups[2]?.models.map(item => item.provider)).toEqual(["ollama", "vllm"]);
-		expect(groups[2]?.discoveryStatus).toBe("cached");
-		expect(groups[2]?.stale).toBe(true);
-		expect(groups.flatMap(group => group.models).some(item => item.provider === "anthropic")).toBe(false);
+		expect(groups[3]?.models.map(item => item.provider)).toEqual(["ollama", "vllm"]);
+		expect(groups[3]?.discoveryStatus).toBe("cached");
+		expect(groups[3]?.stale).toBe(true);
+		expect(groups.flatMap(group => group.models).some(item => item.provider === "anthropic")).toBe(true);
 		expect(groups.flatMap(group => group.models).some(item => item.provider === "google-antigravity")).toBe(false);
 	});
 
@@ -266,6 +266,7 @@ describe("provider-tab model selector", () => {
 
 		for (const character of "sonnet") selector.handleInput(character);
 		selector.handleInput("\r");
+		selector.handleInput("\r");
 		rendered = Bun.stripANSI(selector.render(100).join("\n"));
 		for (const effort of ["min", "low", "medium", "high", "xhigh", "max"]) {
 			expect(rendered).toContain(`${effort} —`);
@@ -336,8 +337,8 @@ describe("provider-tab model selector", () => {
 		let rendered = Bun.stripANSI(selector.render(120).join("\n"));
 		expect(rendered).toContain("Google Vertex");
 		expect(rendered).not.toContain("Google Vertex (stale)");
-		expect(rendered).toContain("Cached model list");
-		expect(rendered).toContain("Ctrl+R to refresh");
+		expect(rendered).toContain("Refreshing Google Vertex model list");
+		expect(rendered).toContain("Ctrl+R: refresh");
 
 		selector.handleInput("\x12");
 		await Bun.sleep(0);
@@ -373,6 +374,7 @@ describe("provider-tab model selector", () => {
 		selector.handleInput("\t");
 		await Bun.sleep(0);
 		selector.handleInput("\r");
+		selector.handleInput("\r");
 		const picker = Bun.stripANSI(selector.render(100).join("\n"));
 		expect(picker).not.toContain("min —");
 		expect(picker).toContain("low —");
@@ -388,13 +390,50 @@ describe("provider-tab model selector", () => {
 		await Bun.sleep(0);
 		for (const character of "sol") selector.handleInput(character);
 		selector.handleInput("\r");
+		selector.handleInput("\r");
 		for (let index = 0; index < 5; index += 1) selector.handleInput("\x1b[B");
 		selector.handleInput("\r");
 		expect(onSelect).toHaveBeenCalledWith(
-			expect.objectContaining({ id: "gpt-5.6-sol" }),
-			null,
-			Effort.XHigh,
-			"openai-codex/gpt-5.6-sol",
+			expect.objectContaining({
+				model: expect.objectContaining({ id: "gpt-5.6-sol" }),
+				scope: "conversation",
+				thinkingLevel: Effort.XHigh,
+				selector: "openai-codex/gpt-5.6-sol",
+			}),
 		);
 	});
+});
+
+it("keeps model rows and panel height fixed while the refresh spinner advances and settles", async () => {
+	let pending: Promise<void> | undefined;
+	const { selector } = selectorHarness(undefined, {
+		refreshProvider: async () => {
+			await pending;
+		},
+	});
+	await Bun.sleep(20);
+	const before = new Map([52, 120].map(width => [width, Bun.stripANSI(selector.render(width).join("\n"))]));
+	const gate = Promise.withResolvers<void>();
+	pending = gate.promise;
+	selector.handleInput("\x12");
+	await Bun.sleep(10);
+	const first = Bun.stripANSI(selector.render(120).join("\n"));
+	await Bun.sleep(120);
+	const second = Bun.stripANSI(selector.render(120).join("\n"));
+	try {
+		expect(first).not.toBe(second);
+		for (const [width, idle] of before) {
+			const refreshing = Bun.stripANSI(selector.render(width).join("\n"));
+			expect(refreshing.split("\n").length).toBe(idle.split("\n").length);
+			expect(refreshing.split("\n").findIndex(line => line.includes("GPT-5.6 Sol"))).toBe(
+				idle.split("\n").findIndex(line => line.includes("GPT-5.6 Sol")),
+			);
+		}
+	} finally {
+		gate.resolve();
+	}
+	await Bun.sleep(20);
+	for (const [width, idle] of before) {
+		expect(Bun.stripANSI(selector.render(width).join("\n"))).toBe(idle);
+	}
 });

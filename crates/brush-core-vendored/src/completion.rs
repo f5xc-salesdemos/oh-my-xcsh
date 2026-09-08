@@ -236,7 +236,6 @@ impl Spec {
 	///
 	/// * `shell` - The shell instance to use for completion generation.
 	/// * `context` - The context in which completion is being generated.
-
 	pub async fn get_completions(
 		&self,
 		shell: &mut Shell,
@@ -294,27 +293,7 @@ impl Spec {
 			candidates.append(&mut new_candidates);
 		}
 
-		// Apply filter pattern, if present. Anything the filter selects gets removed.
-		if let Some(filter_pattern) = &self.filter_pattern {
-			if !filter_pattern.is_empty() {
-				let mut updated = IndexSet::new();
-
-				for candidate in candidates {
-					let matches = completion_filter_pattern_matches(
-						filter_pattern.as_str(),
-						candidate.as_str(),
-						context.token_to_complete,
-						shell,
-					)?;
-
-					if self.filter_pattern_excludes != matches {
-						updated.insert(candidate);
-					}
-				}
-
-				candidates = updated;
-			}
-		}
+		candidates = self.filter_candidates(candidates, context, shell)?;
 
 		// Add prefix and/or suffix, if present.
 		if self.prefix.is_some() || self.suffix.is_some() {
@@ -384,181 +363,180 @@ impl Spec {
 		Ok(Answer::Candidates(candidates, processing_options))
 	}
 
+	fn filter_candidates(
+		&self,
+		mut candidates: IndexSet<String>,
+		context: &Context<'_>,
+		shell: &Shell,
+	) -> Result<IndexSet<String>, error::Error> {
+		// Apply filter pattern, if present. Anything the filter selects gets removed.
+		if let Some(filter_pattern) = &self.filter_pattern {
+			if !filter_pattern.is_empty() {
+				let mut updated = IndexSet::new();
+
+				for candidate in candidates {
+					let matches = completion_filter_pattern_matches(
+						filter_pattern.as_str(),
+						candidate.as_str(),
+						context.token_to_complete,
+						shell,
+					)?;
+
+					if self.filter_pattern_excludes != matches {
+						updated.insert(candidate);
+					}
+				}
+
+				candidates = updated;
+			}
+		}
+
+		Ok(candidates)
+	}
+
+	fn add_job_completions(
+		candidates: &mut IndexSet<String>,
+		shell: &Shell,
+		action: &CompleteAction,
+		token: &str,
+	) {
+		for job in &shell.jobs.jobs {
+			let include = match action {
+				CompleteAction::Running => matches!(job.state, jobs::JobState::Running),
+				CompleteAction::Stopped => matches!(job.state, jobs::JobState::Stopped),
+				_ => true,
+			};
+			if include && job.command_name().starts_with(token) {
+				candidates.insert(job.command_name().to_owned());
+			}
+		}
+	}
+
+	fn add_option_completions(
+		candidates: &mut IndexSet<String>,
+		action: &CompleteAction,
+		token: &str,
+	) {
+		let kind = if matches!(action, CompleteAction::SetOpt) {
+			namedoptions::ShellOptionKind::SetO
+		} else {
+			namedoptions::ShellOptionKind::Shopt
+		};
+		candidates.extend(
+			namedoptions::options(kind)
+				.iter()
+				.filter(|option| option.name.starts_with(token))
+				.map(|option| option.name.to_owned()),
+		);
+	}
+
+	fn add_hostname_completion(candidates: &mut IndexSet<String>, token: &str) {
+		if let Ok(name) = sys::network::get_hostname() {
+			let name = name.to_string_lossy();
+			if name.starts_with(token) {
+				candidates.insert(name.to_string());
+			}
+		}
+	}
+
 	async fn generate_action_completions(
 		&self,
 		shell: &Shell,
 		context: &Context<'_>,
 	) -> Result<IndexSet<String>, error::Error> {
 		let mut candidates = IndexSet::new();
-
 		let token = context.token_to_complete;
-
 		for action in &self.actions {
 			match action {
-				CompleteAction::Alias => {
-					for name in shell.aliases.keys() {
-						if name.starts_with(token) {
-							candidates.insert(name.clone());
-						}
-					}
+				CompleteAction::Alias => candidates.extend(
+					shell
+						.aliases
+						.keys()
+						.filter(|name| name.starts_with(token))
+						.cloned(),
+				),
+				CompleteAction::ArrayVar => candidates.extend(
+					shell
+						.env
+						.iter()
+						.filter(|(name, var)| var.value().is_array() && name.starts_with(token))
+						.map(|(name, _)| name.to_owned()),
+				),
+				CompleteAction::Binding | CompleteAction::Service => {
+					tracing::debug!(target: trace_categories::COMPLETION, "unimplemented completion action: {action:?}");
 				},
-				CompleteAction::ArrayVar => {
-					for (name, var) in shell.env.iter() {
-						if var.value().is_array() && name.starts_with(token) {
-							candidates.insert(name.to_owned());
-						}
-					}
-				},
-				CompleteAction::Binding => {
-					tracing::debug!(target: trace_categories::COMPLETION, "unimplemented: complete -A binding");
-				},
-				CompleteAction::Builtin => {
-					for name in shell.builtins().keys() {
-						if name.starts_with(token) {
-							candidates.insert(name.to_owned());
-						}
-					}
-				},
+				CompleteAction::Builtin | CompleteAction::HelpTopic => candidates.extend(
+					shell
+						.builtins()
+						.keys()
+						.filter(|name| name.starts_with(token))
+						.map(|name| (*name).clone()),
+				),
 				CompleteAction::Command => {
-					let mut command_completions = get_command_completions(shell, context);
-					candidates.append(&mut command_completions);
+					candidates.append(&mut get_command_completions(shell, context));
 				},
-				CompleteAction::Directory => {
-					let mut file_completions =
-						get_file_completions(shell, context.token_to_complete, true).await;
-					candidates.append(&mut file_completions);
-				},
-				CompleteAction::Disabled => {
-					for (name, registration) in shell.builtins() {
-						if registration.disabled && name.starts_with(token) {
-							candidates.insert(name.to_owned());
-						}
-					}
-				},
-				CompleteAction::Enabled => {
-					for (name, registration) in shell.builtins() {
-						if !registration.disabled && name.starts_with(token) {
-							candidates.insert(name.to_owned());
-						}
-					}
-				},
-				CompleteAction::Export => {
-					for (key, value) in shell.env.iter() {
-						if value.is_exported() && key.starts_with(token) {
-							candidates.insert(key.to_owned());
-						}
-					}
-				},
-				CompleteAction::File => {
-					let mut file_completions =
-						get_file_completions(shell, context.token_to_complete, false).await;
-					candidates.append(&mut file_completions);
-				},
+				CompleteAction::Directory | CompleteAction::File => candidates.append(
+					&mut get_file_completions(shell, token, matches!(action, CompleteAction::Directory))
+						.await,
+				),
+				CompleteAction::Disabled | CompleteAction::Enabled => candidates.extend(
+					shell
+						.builtins()
+						.iter()
+						.filter(|(name, registration)| {
+							registration.disabled == matches!(action, CompleteAction::Disabled)
+								&& name.starts_with(token)
+						})
+						.map(|(name, _)| (*name).clone()),
+				),
+				CompleteAction::Export => candidates.extend(
+					shell
+						.env
+						.iter()
+						.filter(|(name, var)| var.is_exported() && name.starts_with(token))
+						.map(|(name, _)| name.to_owned()),
+				),
 				CompleteAction::Function => {
-					for (name, _) in shell.funcs().iter() {
-						candidates.insert(name.to_owned());
-					}
+					candidates.extend(shell.funcs().iter().map(|(name, _)| name.to_owned()));
 				},
-				CompleteAction::Group => {
-					for group_name in users::get_all_groups()? {
-						if group_name.starts_with(token) {
-							candidates.insert(group_name);
-						}
-					}
+				CompleteAction::Group => candidates.extend(
+					users::get_all_groups()?
+						.into_iter()
+						.filter(|name| name.starts_with(token)),
+				),
+				CompleteAction::HostName => Self::add_hostname_completion(&mut candidates, token),
+				CompleteAction::Job | CompleteAction::Running | CompleteAction::Stopped => {
+					Self::add_job_completions(&mut candidates, shell, action, token);
 				},
-				CompleteAction::HelpTopic => {
-					// For now, we only have help topics for built-in commands.
-					for name in shell.builtins().keys() {
-						if name.starts_with(token) {
-							candidates.insert(name.to_owned());
-						}
-					}
+				CompleteAction::Keyword => candidates.extend(
+					shell
+						.get_keywords()
+						.iter()
+						.filter(|name| name.starts_with(token))
+						.cloned(),
+				),
+				CompleteAction::SetOpt | CompleteAction::ShOpt => {
+					Self::add_option_completions(&mut candidates, action, token);
 				},
-				CompleteAction::HostName => {
-					// N.B. We only retrieve one hostname.
-					if let Ok(name) = sys::network::get_hostname() {
-						let name = name.to_string_lossy();
-						if name.starts_with(token) {
-							candidates.insert(name.to_string());
-						}
-					}
-				},
-				CompleteAction::Job => {
-					for job in &shell.jobs.jobs {
-						let command_name = job.command_name();
-						if command_name.starts_with(token) {
-							candidates.insert(command_name.to_owned());
-						}
-					}
-				},
-				CompleteAction::Keyword => {
-					for keyword in shell.get_keywords() {
-						if keyword.starts_with(token) {
-							candidates.insert(keyword.clone());
-						}
-					}
-				},
-				CompleteAction::Running => {
-					for job in &shell.jobs.jobs {
-						if matches!(job.state, jobs::JobState::Running) {
-							let command_name = job.command_name();
-							if command_name.starts_with(token) {
-								candidates.insert(command_name.to_owned());
-							}
-						}
-					}
-				},
-				CompleteAction::Service => {
-					tracing::debug!(target: trace_categories::COMPLETION, "unimplemented: complete -A service");
-				},
-				CompleteAction::SetOpt => {
-					for option in namedoptions::options(namedoptions::ShellOptionKind::SetO).iter() {
-						if option.name.starts_with(token) {
-							candidates.insert(option.name.to_owned());
-						}
-					}
-				},
-				CompleteAction::ShOpt => {
-					for option in namedoptions::options(namedoptions::ShellOptionKind::Shopt).iter() {
-						if option.name.starts_with(token) {
-							candidates.insert(option.name.to_owned());
-						}
-					}
-				},
-				CompleteAction::Signal => {
-					for signal in traps::TrapSignal::iterator() {
-						if signal.as_str().starts_with(token) {
-							candidates.insert(signal.as_str().to_string());
-						}
-					}
-				},
-				CompleteAction::Stopped => {
-					for job in &shell.jobs.jobs {
-						if matches!(job.state, jobs::JobState::Stopped) {
-							let command_name = job.command_name();
-							if command_name.starts_with(token) {
-								candidates.insert(job.command_name().to_owned());
-							}
-						}
-					}
-				},
-				CompleteAction::User => {
-					for user_name in users::get_all_users()? {
-						if user_name.starts_with(token) {
-							candidates.insert(user_name);
-						}
-					}
-				},
-				CompleteAction::Variable => {
-					for (key, _) in shell.env.iter() {
-						if key.starts_with(token) {
-							candidates.insert(key.to_owned());
-						}
-					}
-				},
+				CompleteAction::Signal => candidates.extend(
+					traps::TrapSignal::iterator()
+						.filter(|signal| signal.as_str().starts_with(token))
+						.map(|signal| signal.as_str().to_string()),
+				),
+				CompleteAction::User => candidates.extend(
+					users::get_all_users()?
+						.into_iter()
+						.filter(|name| name.starts_with(token)),
+				),
+				CompleteAction::Variable => candidates.extend(
+					shell
+						.env
+						.iter()
+						.filter(|(name, _)| name.starts_with(token))
+						.map(|(name, _)| name.to_owned()),
+				),
 			}
 		}
-
 		Ok(candidates)
 	}
 

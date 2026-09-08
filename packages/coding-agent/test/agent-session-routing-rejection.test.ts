@@ -47,7 +47,7 @@ describe("AgentSession Routing Rejection Escalation (TDD)", () => {
 	});
 
 	it("should step escalation sequentially when safeToContinue is true", async () => {
-		modelRegistry.getAvailable = () => [{ provider: "openai", id: "gpt-5.4" }] as any;
+		modelRegistry.getAvailable = () => [{ provider: "openai", id: "gpt-5.6-terra" }] as any;
 		modelRegistry.getApiKey = async () => "mock-key";
 
 		const events: any[] = [];
@@ -69,7 +69,7 @@ describe("AgentSession Routing Rejection Escalation (TDD)", () => {
 	});
 
 	it("should not mutate state if mode is shadow", async () => {
-		modelRegistry.getAvailable = () => [{ provider: "openai", id: "gpt-5.4" }] as any;
+		modelRegistry.getAvailable = () => [{ provider: "openai", id: "gpt-5.6-terra" }] as any;
 		settings.set("routing.mode", "shadow");
 
 		const events: any[] = [];
@@ -125,7 +125,7 @@ describe("AgentSession Routing Rejection Escalation (TDD)", () => {
 		expect(session.getRoutingState().currentTier).toBe("utility");
 	});
 	it("should revert state and resume agent if target exists but switch/authentication fails", async () => {
-		modelRegistry.getAvailable = () => [{ provider: "openai", id: "gpt-5.4" }] as any;
+		modelRegistry.getAvailable = () => [{ provider: "openai", id: "gpt-5.6-terra" }] as any;
 		session.setModelRoutingSwitch = async () => {
 			throw new Error("Simulated auth failure");
 		};
@@ -159,7 +159,7 @@ describe("AgentSession Routing Rejection Escalation (TDD)", () => {
 	it("should not immediately switch model if outcome is unsafe to continue", async () => {
 		modelRegistry.getAvailable = () =>
 			[
-				{ provider: "openai", id: "gpt-5.4" },
+				{ provider: "openai", id: "gpt-5.6-terra" },
 				{ provider: "openai", id: "gpt-5.6-sol" },
 			] as any;
 
@@ -182,7 +182,7 @@ describe("AgentSession Routing Rejection Escalation (TDD)", () => {
 	});
 
 	it("should restore model state if escalation swap fails", async () => {
-		modelRegistry.getAvailable = () => [{ provider: "openai", id: "gpt-5.4" }] as any;
+		modelRegistry.getAvailable = () => [{ provider: "openai", id: "gpt-5.6-terra" }] as any;
 		modelRegistry.getApiKey = async () => "mock-key";
 
 		const originalSetModel = session.setModelRoutingSwitch.bind(session);

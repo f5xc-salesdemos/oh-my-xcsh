@@ -282,7 +282,7 @@ export class Settings {
 	 * Flush any pending saves to disk.
 	 * Call before exit to ensure all changes are persisted.
 	 */
-	async flush(): Promise<void> {
+	async flush(options?: { throwOnError?: boolean }): Promise<void> {
 		if (this.#saveTimer) {
 			clearTimeout(this.#saveTimer);
 			this.#saveTimer = undefined;
@@ -291,7 +291,7 @@ export class Settings {
 			await this.#savePromise;
 		}
 		if (this.#modified.size > 0) {
-			await this.#saveNow();
+			await this.#saveNow(options?.throwOnError);
 		}
 	}
 
@@ -588,13 +588,18 @@ export class Settings {
 		}
 		this.#saveTimer = setTimeout(() => {
 			this.#saveTimer = undefined;
-			this.#saveNow().catch(err => {
-				logger.warn("Settings: background save failed", { error: String(err) });
-			});
+			const pending = this.#saveNow()
+				.catch(err => {
+					logger.warn("Settings: background save failed", { error: String(err) });
+				})
+				.finally(() => {
+					if (this.#savePromise === pending) this.#savePromise = undefined;
+				});
+			this.#savePromise = pending;
 		}, 100);
 	}
 
-	async #saveNow(): Promise<void> {
+	async #saveNow(throwOnError = false): Promise<void> {
 		if (!this.#persist || !this.#configPath || this.#modified.size === 0) return;
 
 		const configPath = this.#configPath;
@@ -623,6 +628,7 @@ export class Settings {
 			for (const p of modifiedPaths) {
 				this.#modified.add(p);
 			}
+			if (throwOnError) throw error;
 		}
 
 		this.#rebuildMerged();

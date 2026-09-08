@@ -953,7 +953,9 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			checkAbort();
 			const authStorage = options.authStorage ?? (await discoverAuthStorage());
 			checkAbort();
-			const modelRegistry = options.modelRegistry ?? new ModelRegistry(authStorage);
+			const modelRegistry =
+				options.modelRegistry ??
+				new ModelRegistry(authStorage, undefined, { getProviderOrder: () => settings.get("modelProviderOrder") });
 			await modelRegistry.refresh();
 			checkAbort();
 

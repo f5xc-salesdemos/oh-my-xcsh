@@ -115,53 +115,55 @@ impl builtins::Command for DeclareCommand {
 
 	type Error = brush_core::Error;
 
-	async fn execute(
+	fn execute(
 		&self,
 		mut context: brush_core::ExecutionContext<'_>,
-	) -> Result<brush_core::ExecutionResult, Self::Error> {
-		let verb = match context.command_name.as_str() {
-			"local" => DeclareVerb::Local,
-			"readonly" => DeclareVerb::Readonly,
-			_ => DeclareVerb::Declare,
-		};
+	) -> impl Future<Output = Result<brush_core::ExecutionResult, Self::Error>> {
+		futures::future::lazy(move |_| {
+			let verb = match context.command_name.as_str() {
+				"local" => DeclareVerb::Local,
+				"readonly" => DeclareVerb::Readonly,
+				_ => DeclareVerb::Declare,
+			};
 
-		if matches!(verb, DeclareVerb::Local) && !context.shell.in_function() {
-			writeln!(context.stderr(), "can only be used in a function")?;
-			return Ok(ExecutionResult::general_error());
-		}
+			if matches!(verb, DeclareVerb::Local) && !context.shell.in_function() {
+				writeln!(context.stderr(), "can only be used in a function")?;
+				return Ok(ExecutionResult::general_error());
+			}
 
-		if self.locals_inherit_from_prev_scope {
-			return error::unimp("declare -I");
-		}
+			if self.locals_inherit_from_prev_scope {
+				return error::unimp("declare -I");
+			}
 
-		let mut result = ExecutionResult::success();
-		if !self.declarations.is_empty() {
-			for declaration in &self.declarations {
-				if self.print && !matches!(verb, DeclareVerb::Readonly) {
-					if !self.try_display_declaration(&context, declaration, verb)? {
-						result = ExecutionResult::general_error();
-					}
-				} else {
-					if !self.process_declaration(&mut context, declaration, verb)? {
-						result = ExecutionResult::general_error();
+			let mut result = ExecutionResult::success();
+			if !self.declarations.is_empty() {
+				for declaration in &self.declarations {
+					if self.print && !matches!(verb, DeclareVerb::Readonly) {
+						if !self.try_display_declaration(&context, declaration, verb)? {
+							result = ExecutionResult::general_error();
+						}
+					} else {
+						if !self.process_declaration(&mut context, declaration, verb)? {
+							result = ExecutionResult::general_error();
+						}
 					}
 				}
-			}
-		} else {
-			// Display matching declarations from the variable environment.
-			if !self.function_names_only && !self.function_names_or_defs_only {
-				self.display_matching_env_declarations(&context, verb)?;
+			} else {
+				// Display matching declarations from the variable environment.
+				if !self.function_names_only && !self.function_names_or_defs_only {
+					self.display_matching_env_declarations(&context, verb)?;
+				}
+
+				// Do the same for functions.
+				if !matches!(verb, DeclareVerb::Local | DeclareVerb::Readonly)
+					&& (!self.print || self.function_names_only || self.function_names_or_defs_only)
+				{
+					self.display_matching_functions(&context)?;
+				}
 			}
 
-			// Do the same for functions.
-			if !matches!(verb, DeclareVerb::Local | DeclareVerb::Readonly)
-				&& (!self.print || self.function_names_only || self.function_names_or_defs_only)
-			{
-				self.display_matching_functions(&context)?;
-			}
-		}
-
-		Ok(result)
+			Ok(result)
+		})
 	}
 }
 
