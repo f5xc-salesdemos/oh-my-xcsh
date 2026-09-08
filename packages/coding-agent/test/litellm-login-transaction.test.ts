@@ -22,14 +22,19 @@ function createPaths() {
 	};
 }
 
-function createSession(options?: { failModelApply?: boolean; selectedModel?: Model }) {
+function createSession(options?: { failModelApply?: boolean; failRoleApply?: boolean; selectedModel?: Model }) {
 	const previousModel = { id: "previous", provider: "previous-provider" } as Model;
 	const selectedModel = options?.selectedModel ?? ({ id: "gpt-5.6-sol", provider: "litellm" } as Model);
 	const refresh = vi.fn(async () => {});
 	let modelRoles: Record<string, string> = { default: "previous-provider/previous:medium", smol: "other/smol" };
+	let failRoleApply = options?.failRoleApply ?? false;
 	const settings = {
 		getModelRoles: vi.fn(() => modelRoles),
 		set: vi.fn((_key: "modelRoles", value: Record<string, string>) => {
+			if (failRoleApply) {
+				failRoleApply = false;
+				throw new Error("role persistence failed");
+			}
 			modelRoles = value;
 		}),
 	};
@@ -135,6 +140,30 @@ describe("commitLiteLLMLogin", () => {
 		expect(fs.readFileSync(paths.modelsPath, "utf8")).toBe(previousModels);
 		expect(fs.readFileSync(paths.configPath, "utf8")).toBe(previousConfig);
 		expect(state.refresh).toHaveBeenCalledTimes(2);
+		expect(state.setModelTemporary).toHaveBeenCalledWith(state.previousModel, ThinkingLevel.Medium);
+		expect(state.getModelRoles()).toEqual({ default: "previous-provider/previous:medium", smol: "other/smol" });
+	});
+
+	it("restores the selected model and roles when family-default persistence fails", async () => {
+		const paths = createPaths();
+		const previousModels = "previous models\n";
+		const previousConfig = "previous config\n";
+		fs.writeFileSync(paths.modelsPath, previousModels);
+		fs.writeFileSync(paths.configPath, previousConfig);
+		const state = createSession({ failRoleApply: true });
+
+		await expect(
+			commitLiteLLMLogin({
+				...paths,
+				credentials: { baseUrl: "https://litellm.example.test", apiKey: "sk-test" },
+				probe: { reachable: true, models: ["gpt-5.6-sol"], apiBasePath: "/v1" },
+				choice: GPT,
+				session: state.session,
+			}),
+		).rejects.toThrow("role persistence failed");
+
+		expect(fs.readFileSync(paths.modelsPath, "utf8")).toBe(previousModels);
+		expect(fs.readFileSync(paths.configPath, "utf8")).toBe(previousConfig);
 		expect(state.setModelTemporary).toHaveBeenCalledWith(state.previousModel, ThinkingLevel.Medium);
 		expect(state.getModelRoles()).toEqual({ default: "previous-provider/previous:medium", smol: "other/smol" });
 	});
