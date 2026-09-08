@@ -6,11 +6,8 @@ export const BUILTIN_ROUTING_PRESETS: Record<string, RoutingPoolConfig> = {
 	"openai/gpt-5.6": {
 		id: "openai/gpt-5.6",
 		provider: "openai",
-		tiers: {
-			utility: "gpt-5.4-mini",
-			balanced: "gpt-5.4",
-			frontier: "gpt-5.6-sol",
-		},
+		tiers: { ...OPENAI_CODEX_ROUTING_POOL.tiers },
+		effortPolicy: OPENAI_CODEX_ROUTING_POOL.effortPolicy,
 	},
 	[ANTHROPIC_ROUTING_POOL.id]: ANTHROPIC_ROUTING_POOL,
 	"litellm/openai": {
