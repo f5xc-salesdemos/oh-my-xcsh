@@ -1,5 +1,6 @@
 import type { OAuthProviderInfo } from "@f5-sales-demo/pi-ai";
 import { Container, Input, matchesKey, Spacer, Text, TruncatedText } from "@f5-sales-demo/pi-tui";
+import type { ProviderAccessState } from "../../config/model-registry";
 import { theme } from "../../modes/theme/theme";
 import { matchesSelectCancel } from "../../modes/utils/keybinding-matchers";
 import type { AuthStorage } from "../../session/auth-storage";
@@ -22,6 +23,9 @@ export class OAuthSelectorComponent extends Container {
 	#onCancelCallback: () => void;
 	#statusMessage: string | undefined;
 	#validateAuthCallback?: (providerId: string) => Promise<boolean>;
+	#getAccessState?: (providerId: string) => ProviderAccessState;
+	#validateAccess?: (providerId: string) => Promise<ProviderAccessState>;
+	#isExcluded?: (providerId: string) => boolean;
 	#requestRenderCallback?: () => void;
 	#authState: Map<string, "checking" | "valid" | "invalid"> = new Map();
 	#spinnerFrame: number = 0;
@@ -34,6 +38,9 @@ export class OAuthSelectorComponent extends Container {
 		onCancel: () => void,
 		options?: {
 			validateAuth?: (providerId: string) => Promise<boolean>;
+			getAccessState?: (providerId: string) => ProviderAccessState;
+			validateAccess?: (providerId: string) => Promise<ProviderAccessState>;
+			isExcluded?: (providerId: string) => boolean;
 			requestRender?: () => void;
 		},
 	) {
@@ -43,6 +50,9 @@ export class OAuthSelectorComponent extends Container {
 		this.#onSelectCallback = onSelect;
 		this.#onCancelCallback = onCancel;
 		this.#validateAuthCallback = options?.validateAuth;
+		this.#getAccessState = options?.getAccessState;
+		this.#validateAccess = options?.validateAccess;
+		this.#isExcluded = options?.isExcluded;
 		this.#requestRenderCallback = options?.requestRender;
 		// Load all OAuth providers
 		this.#loadProviders();
@@ -97,13 +107,14 @@ export class OAuthSelectorComponent extends Container {
 	}
 
 	#startValidation(): void {
-		if (!this.#validateAuthCallback) return;
+		if (!this.#validateAuthCallback && !this.#validateAccess) return;
 		const generation = this.#validationGeneration + 1;
 		this.#validationGeneration = generation;
 
 		let pending = 0;
 		for (const provider of this.#allProviders) {
-			if (!this.#authStorage.hasAuth(provider.id)) {
+			const access = this.#getAccessState?.(provider.id);
+			if (!this.#authStorage.hasAuth(provider.id) && access?.credentialSource !== "keyless") {
 				this.#authState.delete(provider.id);
 				continue;
 			}
@@ -120,16 +131,23 @@ export class OAuthSelectorComponent extends Container {
 	}
 
 	async #validateProvider(providerId: string, generation: number): Promise<void> {
-		if (!this.#validateAuthCallback) return;
-		let isValid = false;
+		if (!this.#validateAuthCallback && !this.#validateAccess) return;
+		let result: "valid" | "invalid" | undefined;
 		try {
-			isValid = await this.#validateAuthCallback(providerId);
+			if (this.#validateAccess) {
+				const access = await this.#validateAccess(providerId);
+				if (access.status === "connected") result = "valid";
+				else if (access.status === "reauth-required") result = "invalid";
+			} else {
+				result = (await this.#validateAuthCallback!(providerId)) ? "valid" : "invalid";
+			}
 		} catch {
-			isValid = false;
+			result = undefined;
 		}
 
 		if (generation !== this.#validationGeneration) return;
-		this.#authState.set(providerId, isValid ? "valid" : "invalid");
+		if (result) this.#authState.set(providerId, result);
+		else this.#authState.delete(providerId);
 		if (![...this.#authState.values()].includes("checking")) {
 			this.#stopSpinner();
 		}
@@ -157,19 +175,28 @@ export class OAuthSelectorComponent extends Container {
 	}
 
 	#getStatusIndicator(providerId: string): string {
+		const excluded = this.#isExcluded?.(providerId) ? theme.fg("muted", " · excluded from picker") : "";
 		const state = this.#authState.get(providerId);
 		if (state === "checking") {
 			const frameCount = theme.spinnerFrames.length;
 			const spinner = frameCount > 0 ? `${theme.spinnerFrames[this.#spinnerFrame % frameCount]} ` : "";
-			return theme.fg("warning", ` ${spinner}checking`);
+			return theme.fg("warning", ` ${spinner}checking`) + excluded;
 		}
-		if (state === "invalid") {
-			return theme.fg("error", ` ${theme.status.error} invalid`);
+		const access = this.#getAccessState?.(providerId);
+		if (state === "invalid" || access?.status === "reauth-required") {
+			return theme.fg("error", ` ${theme.status.error} re-authentication required`) + excluded;
 		}
 		if (state === "valid") {
-			return theme.fg("success", ` ${theme.status.success} logged in`);
+			return theme.fg("success", ` ${theme.status.success} connected`) + excluded;
 		}
-		return this.#authStorage.hasAuth(providerId) ? theme.fg("success", ` ${theme.status.success} logged in`) : "";
+		let label = "";
+		if (access?.credentialSource === "keyless")
+			label = theme.fg("success", ` ${theme.status.success} keyless configured`);
+		else if (access?.status === "unreachable") label = theme.fg("warning", ` ${theme.status.warning} unreachable`);
+		else if (access?.status === "configured-unverified") label = theme.fg("warning", " credential detected");
+		else if (access?.status === "connected") label = theme.fg("success", ` ${theme.status.success} connected`);
+		else if (!access && this.#authStorage.hasAuth(providerId)) label = theme.fg("warning", " credential detected");
+		return label + excluded;
 	}
 	#updateList(): void {
 		this.#listContainer.clear();

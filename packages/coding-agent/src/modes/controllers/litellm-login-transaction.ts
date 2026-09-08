@@ -25,7 +25,9 @@ interface TransactionSession {
 	setThinkingLevel(level: ThinkingLevel): void;
 	settings: {
 		getModelRoles(): Readonly<Record<string, string | undefined>>;
+		get?(key: "modelProviderAllowlist"): string[];
 		set(key: "modelRoles", value: Record<string, string>): void;
+		set(key: "modelProviderAllowlist", value: string[]): void;
 	};
 }
 
@@ -36,6 +38,7 @@ interface CommitLiteLLMLoginOptions {
 	probe: ProbeResult;
 	choice: LiteLLMLoginModelChoice;
 	session: TransactionSession;
+	restrictPicker?: boolean;
 }
 
 interface FileSnapshot {
@@ -80,6 +83,7 @@ export async function commitLiteLLMLogin(options: CommitLiteLLMLoginOptions): Pr
 			(entry): entry is [string, string] => entry[1] !== undefined,
 		),
 	);
+	const previousProviderAllowlist = [...(session.settings.get?.("modelProviderAllowlist") ?? [])];
 
 	try {
 		const yml = generateModelsYml(credentials.baseUrl, {
@@ -95,6 +99,9 @@ export async function commitLiteLLMLogin(options: CommitLiteLLMLoginOptions): Pr
 		const applied = await applyModelAfterLogin(session, choice);
 		if (!applied) throw new Error(`Model unavailable after refresh: ${choice.provider}/${choice.modelId}`);
 		session.settings.set("modelRoles", getLiteLLMLoginModelRoles(choice));
+		if (options.restrictPicker !== undefined) {
+			session.settings.set("modelProviderAllowlist", options.restrictPicker ? ["litellm", "anthropic"] : []);
+		}
 	} catch (error) {
 		const rollbackErrors: unknown[] = [];
 		for (const [filePath, snapshot] of [
@@ -110,6 +117,7 @@ export async function commitLiteLLMLogin(options: CommitLiteLLMLoginOptions): Pr
 
 		try {
 			session.settings.set("modelRoles", previousModelRoles);
+			session.settings.set("modelProviderAllowlist", previousProviderAllowlist);
 		} catch (rollbackError) {
 			rollbackErrors.push(rollbackError);
 		}

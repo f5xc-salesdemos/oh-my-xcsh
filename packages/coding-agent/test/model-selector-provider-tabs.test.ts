@@ -27,6 +27,39 @@ const state = (
 beforeAll(() => initTheme());
 
 describe("authenticated provider model groups", () => {
+	it("groups both LiteLLM transports into one six-model tab", () => {
+		const ids = ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"];
+		const claudeIds = ["claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5"];
+		const metadata = (provider: string) => ({
+			groupId: "litellm",
+			groupLabel: "LiteLLM",
+			sectionLabel: provider === "litellm" ? "OpenAI" : "Anthropic",
+		});
+		const groups = buildProviderModelGroups(
+			[...ids.map(id => model("litellm", id)), ...claudeIds.map(id => model("anthropic", id))],
+			provider => state(provider),
+			[],
+			"litellm",
+			() => true,
+			false,
+			["litellm", "anthropic"],
+			metadata,
+			provider => ({
+				provider,
+				credentialSource: "configuration",
+				status: "connected",
+				catalogFreshness: "fresh",
+				selectable: true,
+			}),
+		);
+		expect(groups).toHaveLength(1);
+		expect(groups[0]?.label).toBe("LiteLLM");
+		expect(groups[0]?.providers).toEqual(["litellm", "anthropic"]);
+		expect(groups[0]?.stale).toBe(false);
+		expect(groups[0]?.models).toHaveLength(6);
+		expect(new Set(groups[0]?.models.map(item => item.sectionLabel))).toEqual(new Set(["OpenAI", "Anthropic"]));
+	});
+
 	it("keeps only current GPT and per-lineage Gemini families in the browser", () => {
 		const filtered = filterCurrentBrowserModels([
 			model("openai-codex", "gpt-5.5"),
@@ -127,7 +160,12 @@ describe("authenticated provider model groups", () => {
 
 function selectorHarness(
 	currentModel?: Model,
-	options: { staleVertex?: boolean; antigravity?: boolean; refreshProvider?: () => Promise<void> } = {},
+	options: {
+		staleVertex?: boolean;
+		antigravity?: boolean;
+		refreshProvider?: () => Promise<void>;
+		providerAllowlist?: string[];
+	} = {},
 ) {
 	const sol = model("openai-codex", "gpt-5.6-sol", {
 		name: "GPT-5.6-Sol",
@@ -189,12 +227,19 @@ function selectorHarness(
 		getAll: () => models,
 		getAvailable: () => models,
 		getProviderDiscoveryState: (provider: string) => states.get(provider),
+		getProviderAccessState: (provider: string) => ({
+			provider,
+			credentialSource: provider === "ollama" ? "keyless" : "stored-oauth",
+			status: provider === "google-vertex" && options.staleVertex ? "unreachable" : "connected",
+			catalogFreshness: provider === "google-vertex" && options.staleVertex ? "stale" : "fresh",
+			selectable: !(provider === "google-vertex" && options.staleVertex),
+		}),
 	} as unknown as ModelRegistry;
 	const onSelect = vi.fn();
 	const selector = new ModelSelectorComponent(
 		{ requestRender: vi.fn() } as unknown as TUI,
 		currentModel ?? sol,
-		Settings.isolated(),
+		Settings.isolated({ modelProviderAllowlist: options.providerAllowlist ?? [] }),
 		registry,
 		[],
 		onSelect,
@@ -278,7 +323,7 @@ describe("provider-tab model selector", () => {
 		const { selector } = selectorHarness();
 		await Bun.sleep(0);
 		const rendered = Bun.stripANSI(selector.render(180).join("\n"));
-		expect(rendered).toContain("Only showing models from configured providers (see README for details)");
+		expect(rendered).not.toContain("Only showing models from configured providers");
 		expect(rendered).toContain("ChatGPT Subscription");
 		expect(rendered).toContain("OpenAI › GPT-5.6");
 		expect(rendered.match(/OpenAI › GPT-5\.6/g)).toHaveLength(1);
@@ -288,6 +333,15 @@ describe("provider-tab model selector", () => {
 		expect(rendered).not.toContain("QUICK");
 		expect(rendered).not.toContain("ALL MODELS");
 		expect(rendered).not.toContain("Gemini 3.8 Flash");
+	});
+
+	it("applies the normal picker allowlist without changing explicit model resolution", async () => {
+		const { selector } = selectorHarness(undefined, { providerAllowlist: ["google-vertex"] });
+		await Bun.sleep(0);
+		const rendered = Bun.stripANSI(selector.render(180).join("\n"));
+		expect(rendered).toContain("Models:   Google Vertex");
+		expect(rendered).not.toContain("ChatGPT Subscription");
+		expect(rendered).not.toContain("Only showing models from configured providers");
 	});
 
 	it("searches globally, groups providers, and clearing restores the active provider", async () => {
@@ -348,6 +402,23 @@ describe("provider-tab model selector", () => {
 
 		finishRefresh?.();
 		await Bun.sleep(0);
+	});
+
+	it("never activates a stale disabled row", async () => {
+		const current = model("google-vertex", "gemini-3.8-flash");
+		const { selector, onSelect } = selectorHarness(current, { staleVertex: true });
+		await Bun.sleep(0);
+		const rendered = Bun.stripANSI(selector.render(120).join("\n"));
+		expect(rendered).toContain("Gemini 3.8 Flash");
+		expect(rendered).toContain("unavailable");
+
+		selector.handleInput("\r");
+		selector.handleInput("\r");
+		selector.handleInput("\r");
+		await Bun.sleep(0);
+
+		expect(onSelect).not.toHaveBeenCalled();
+		expect(Bun.stripANSI(selector.render(120).join("\n"))).not.toContain("Action for:");
 	});
 
 	it("supports keyboard tab navigation and narrow rendering", async () => {

@@ -20,6 +20,7 @@ import {
 	ModelRegistry,
 	resolveApiKeyConfig,
 	resolveYamlApiKeyConfig,
+	sanitizeProviderFailure,
 } from "../src/config/model-registry";
 import { _resetSettingsForTest, Settings } from "../src/config/settings";
 import { AuthStorage } from "../src/session/auth-storage";
@@ -149,6 +150,119 @@ describe("ModelRegistry", () => {
 			throw new Error(`Unexpected URL: ${requestUrl}`);
 		});
 	}
+
+	describe("provider access state", () => {
+		test("distinguishes runtime credentials, live validation, and sanitized failures", async () => {
+			authStorage.setRuntimeApiKey("test-cloud", "runtime-secret");
+			writeRawModelsJson({
+				"test-cloud": {
+					baseUrl: "https://models.example.test/v1",
+					api: "openai-completions",
+					discovery: { type: "openai-compat" },
+				},
+			});
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			expect(registry.getProviderAccessState("test-cloud")).toMatchObject({
+				credentialSource: "runtime",
+				status: "configured-unverified",
+				catalogFreshness: "none",
+				selectable: true,
+			});
+
+			const unhook = mockOpenAiCompatibleModels("https://models.example.test/v1/models", ["allowed"]);
+			try {
+				await registry.refreshProvider("test-cloud", "online");
+			} finally {
+				unhook[Symbol.dispose]();
+			}
+			expect(registry.getProviderAccessState("test-cloud")).toMatchObject({
+				status: "connected",
+				catalogFreshness: "fresh",
+				selectable: true,
+			});
+		});
+
+		test("identifies keyless providers without claiming they were validated", () => {
+			writeRawModelsJson({
+				vllm: {
+					baseUrl: "http://vllm.example.test/v1",
+					api: "openai-completions",
+					auth: "none",
+					models: [{ id: "local-model" }],
+				},
+			});
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			expect(registry.getProviderAccessState("vllm")).toMatchObject({
+				credentialSource: "keyless",
+				status: "configured-unverified",
+				selectable: true,
+			});
+		});
+
+		test("does not leave providers without a discovery route in checking state", async () => {
+			authStorage.setRuntimeApiKey("static-cloud", "runtime-secret");
+			writeRawModelsJson({
+				"static-cloud": providerConfig("https://models.example.test/v1", [{ id: "static-model" }]),
+			});
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+
+			await registry.refreshProvider("static-cloud", "online");
+
+			expect(registry.getProviderAccessState("static-cloud")).toMatchObject({
+				credentialSource: "runtime",
+				status: "configured-unverified",
+				selectable: true,
+			});
+		});
+
+		test("classifies a rejected credential as requiring re-authentication", async () => {
+			authStorage.setRuntimeApiKey("test-cloud", "revoked-secret");
+			writeRawModelsJson({
+				"test-cloud": {
+					baseUrl: "https://models.example.test/v1",
+					api: "openai-completions",
+					discovery: { type: "openai-compat" },
+				},
+			});
+			using _hook = hookFetch(input => {
+				if (String(input) === "https://models.example.test/v1/models") {
+					return new Response("Unauthorized", { status: 401 });
+				}
+				throw new Error(`Unexpected URL: ${String(input)}`);
+			});
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+
+			await registry.refreshProvider("test-cloud", "online");
+
+			expect(registry.getProviderAccessState("test-cloud")).toMatchObject({
+				status: "reauth-required",
+				selectable: false,
+			});
+		});
+
+		test("filters configured and discovered models and exposes picker metadata", () => {
+			writeRawModelsJson({
+				demo: {
+					...providerConfig("https://demo.example.test/v1", [{ id: "allowed" }, { id: "blocked" }]),
+					modelAllowlist: ["allowed"],
+					picker: { groupId: "proxy", groupLabel: "Proxy", sectionLabel: "Demo" },
+				},
+			});
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			expect(getModelsForProvider(registry, "demo").map(model => model.id)).toEqual(["allowed"]);
+			expect(registry.getProviderPickerMetadata("demo")).toEqual({
+				groupId: "proxy",
+				groupLabel: "Proxy",
+				sectionLabel: "Demo",
+			});
+		});
+
+		test("redacts tokens and query credentials from provider failures", () => {
+			expect(sanitizeProviderFailure("401 Bearer secret-token https://x.test?api_key=secret-value")).toBe(
+				"401 Bearer [redacted] https://x.test?api_key=[redacted]",
+			);
+		});
+	});
 
 	describe("canonical equivalence", () => {
 		test("groups dotted provider variants under the bundled canonical id", () => {
@@ -2032,7 +2146,7 @@ describe("ModelRegistry", () => {
 					maxTokens: 128_000,
 					compat: { supportsTemperature: false },
 				});
-				expect(registry.find("litellm", "unrelated-model")?.reasoning).toBe(false);
+				expect(registry.find("litellm", "unrelated-model")).toBeUndefined();
 			} finally {
 				if (previousBaseUrl === undefined) delete Bun.env.LITELLM_BASE_URL;
 				else Bun.env.LITELLM_BASE_URL = previousBaseUrl;

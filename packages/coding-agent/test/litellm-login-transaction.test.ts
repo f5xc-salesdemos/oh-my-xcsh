@@ -27,15 +27,18 @@ function createSession(options?: { failModelApply?: boolean; failRoleApply?: boo
 	const selectedModel = options?.selectedModel ?? ({ id: "gpt-5.6-sol", provider: "litellm" } as Model);
 	const refresh = vi.fn(async () => {});
 	let modelRoles: Record<string, string> = { default: "previous-provider/previous:medium", smol: "other/smol" };
+	let modelProviderAllowlist = ["existing-provider"];
 	let failRoleApply = options?.failRoleApply ?? false;
 	const settings = {
 		getModelRoles: vi.fn(() => modelRoles),
-		set: vi.fn((_key: "modelRoles", value: Record<string, string>) => {
-			if (failRoleApply) {
+		get: vi.fn((_key: "modelProviderAllowlist") => modelProviderAllowlist),
+		set: vi.fn((key: "modelRoles" | "modelProviderAllowlist", value: Record<string, string> | string[]) => {
+			if (key === "modelRoles" && failRoleApply) {
 				failRoleApply = false;
 				throw new Error("role persistence failed");
 			}
-			modelRoles = value;
+			if (key === "modelRoles") modelRoles = value as Record<string, string>;
+			else modelProviderAllowlist = value as string[];
 		}),
 	};
 	const setModel = vi.fn(async () => {
@@ -53,6 +56,7 @@ function createSession(options?: { failModelApply?: boolean; failRoleApply?: boo
 		setThinkingLevel,
 		settings,
 		getModelRoles: () => modelRoles,
+		getModelProviderAllowlist: () => modelProviderAllowlist,
 		session: {
 			model: previousModel,
 			thinkingLevel: ThinkingLevel.Medium,
@@ -85,6 +89,8 @@ describe("commitLiteLLMLogin", () => {
 		expect(modelsYml).toContain('baseUrl: "https://litellm.example.test/anthropic"');
 		expect(modelsYml).toContain('baseUrl: "https://litellm.example.test/api/v1"');
 		expect(modelsYml).toContain('apiKey: "sk-test"');
+		expect(modelsYml).toContain("modelAllowlist:");
+		expect(modelsYml).toContain("groupId: litellm");
 		expect(fs.existsSync(paths.configPath)).toBe(true);
 		expect(state.refresh).toHaveBeenCalledWith("online");
 		expect(state.setModel).toHaveBeenCalledWith(state.selectedModel, "default", {
@@ -97,6 +103,38 @@ describe("commitLiteLLMLogin", () => {
 			slow: "litellm/gpt-5.6-sol:high",
 			plan: "litellm/gpt-5.6-sol:high",
 		});
+	});
+
+	it("transactionally restricts the normal picker to both LiteLLM transports", async () => {
+		const paths = createPaths();
+		const state = createSession();
+
+		await commitLiteLLMLogin({
+			...paths,
+			credentials: { baseUrl: "https://litellm.example.test", apiKey: "sk-test" },
+			probe: { reachable: true, models: ["gpt-5.6-sol"], apiBasePath: "/v1" },
+			choice: GPT,
+			restrictPicker: true,
+			session: state.session,
+		});
+
+		expect(state.getModelProviderAllowlist()).toEqual(["litellm", "anthropic"]);
+	});
+
+	it("transactionally clears an existing picker restriction when declined", async () => {
+		const paths = createPaths();
+		const state = createSession();
+
+		await commitLiteLLMLogin({
+			...paths,
+			credentials: { baseUrl: "https://litellm.example.test", apiKey: "sk-test" },
+			probe: { reachable: true, models: ["gpt-5.6-sol"], apiBasePath: "/v1" },
+			choice: GPT,
+			restrictPicker: false,
+			session: state.session,
+		});
+
+		expect(state.getModelProviderAllowlist()).toEqual([]);
 	});
 
 	it("removes legacy role models when applying the GPT-5.6 family", async () => {
@@ -192,6 +230,7 @@ describe("commitLiteLLMLogin", () => {
 		expect(state.refresh).toHaveBeenCalledTimes(2);
 		expect(state.setModelTemporary).toHaveBeenCalledWith(state.previousModel, ThinkingLevel.Medium);
 		expect(state.getModelRoles()).toEqual({ default: "previous-provider/previous:medium", smol: "other/smol" });
+		expect(state.getModelProviderAllowlist()).toEqual(["existing-provider"]);
 	});
 
 	it("restores the selected model and roles when family-default persistence fails", async () => {

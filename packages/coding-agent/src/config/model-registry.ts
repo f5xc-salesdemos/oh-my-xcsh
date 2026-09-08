@@ -270,6 +270,12 @@ const ProviderDiscoverySchema = Type.Object({
 
 const ProviderAuthSchema = Type.Union([Type.Literal("apiKey"), Type.Literal("none")]);
 
+const ProviderPickerSchema = Type.Object({
+	groupId: Type.Optional(Type.String({ minLength: 1 })),
+	groupLabel: Type.Optional(Type.String({ minLength: 1 })),
+	sectionLabel: Type.Optional(Type.String({ minLength: 1 })),
+});
+
 const ProviderConfigSchema = Type.Object({
 	baseUrl: Type.Optional(Type.String({ minLength: 1 })),
 	apiKey: Type.Optional(Type.String({ minLength: 1 })),
@@ -289,6 +295,8 @@ const ProviderConfigSchema = Type.Object({
 	authHeader: Type.Optional(Type.Boolean()),
 	auth: Type.Optional(ProviderAuthSchema),
 	discovery: Type.Optional(ProviderDiscoverySchema),
+	modelAllowlist: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
+	picker: Type.Optional(ProviderPickerSchema),
 	models: Type.Optional(Type.Array(ModelDefinitionSchema)),
 	modelOverrides: Type.Optional(Type.Record(Type.String(), ModelOverrideSchema)),
 });
@@ -429,7 +437,7 @@ interface DiscoveryProviderConfig {
 	optional?: boolean;
 }
 
-export type ProviderDiscoveryStatus = "idle" | "ok" | "cached" | "unavailable" | "unauthenticated";
+export type ProviderDiscoveryStatus = "idle" | "checking" | "ok" | "cached" | "unavailable" | "unauthenticated";
 
 export interface ProviderDiscoveryState {
 	provider: string;
@@ -439,6 +447,53 @@ export interface ProviderDiscoveryState {
 	fetchedAt?: number;
 	models: string[];
 	error?: string;
+}
+
+export type ProviderCredentialSource =
+	| "stored-oauth"
+	| "stored-api-key"
+	| "environment"
+	| "runtime"
+	| "configuration"
+	| "keyless";
+export type ProviderAccessStatus =
+	| "unconfigured"
+	| "checking"
+	| "configured-unverified"
+	| "connected"
+	| "reauth-required"
+	| "unreachable";
+
+export interface ProviderAccessState {
+	provider: string;
+	credentialSource?: ProviderCredentialSource;
+	status: ProviderAccessStatus;
+	catalogFreshness: "none" | "fresh" | "stale";
+	failureReason?: string;
+	verifiedAt?: number;
+	selectable: boolean;
+}
+
+export interface ProviderPickerMetadata {
+	groupId?: string;
+	groupLabel?: string;
+	sectionLabel?: string;
+}
+
+export function sanitizeProviderFailure(reason: string | undefined): string | undefined {
+	if (!reason) return undefined;
+	return reason
+		.replace(/([?&](?:key|token|api[_-]?key|access[_-]?token)=)[^&\s]+/gi, "$1[redacted]")
+		.replace(/\b(?:Bearer|Basic)\s+[^\s]+/gi, match => `${match.split(/\s/, 1)[0]} [redacted]`)
+		.replace(/\b(?:sk|xox|gh[opusr])[-_][A-Za-z0-9._-]{8,}\b/g, "[redacted]")
+		.slice(0, 240);
+}
+
+function isProviderAuthenticationFailure(reason: string | undefined): boolean {
+	return (
+		!!reason &&
+		/(?:\b401\b|\b403\b|unauthori[sz]ed|forbidden|invalid[_ -]grant|invalid[_ -]token|reauth)/i.test(reason)
+	);
 }
 
 export interface CanonicalModelQueryOptions {
@@ -451,6 +506,8 @@ interface CustomModelsResult {
 	models?: CustomModelOverlay[];
 	overrides?: Map<string, ProviderOverride>;
 	modelOverrides?: Map<string, Map<string, ModelOverride>>;
+	modelAllowlists?: Map<string, Set<string>>;
+	pickerMetadata?: Map<string, ProviderPickerMetadata>;
 	keylessProviders?: Set<string>;
 	discoverableProviders?: DiscoveryProviderConfig[];
 	configuredProviders?: Set<string>;
@@ -784,11 +841,14 @@ export class ModelRegistry {
 	#customModelOverlays: CustomModelOverlay[] = [];
 	#providerOverrides: Map<string, ProviderOverride> = new Map();
 	#modelOverrides: Map<string, Map<string, ModelOverride>> = new Map();
+	#modelAllowlists: Map<string, Set<string>> = new Map();
+	#pickerMetadata: Map<string, ProviderPickerMetadata> = new Map();
 	#equivalenceConfig: ModelEquivalenceConfig | undefined;
 	#configError: ConfigError | undefined = undefined;
 	#modelsConfigFile: ConfigFile<ModelsConfig>;
 	#registeredProviderSources: Set<string> = new Set();
 	#providerDiscoveryStates: Map<string, ProviderDiscoveryState> = new Map();
+	#lastCredentialSources: Map<string, ProviderCredentialSource> = new Map();
 	#cacheDbPath?: string;
 	#suppressedSelectors: Map<string, number> = new Map();
 	#backgroundRefresh?: Promise<void>;
@@ -893,17 +953,47 @@ export class ModelRegistry {
 	}
 
 	refreshProvider(providerId: string, strategy: ModelRefreshStrategy = "online"): Promise<void> {
-		return this.#enqueueRefresh(() => this.#refreshProvider(providerId, strategy));
+		return this.refreshProviders([providerId], strategy);
 	}
 
-	async #refreshProvider(providerId: string, strategy: ModelRefreshStrategy): Promise<void> {
-		if (getDisabledProviderIdsFromSettings().has(providerId)) return;
-		for (const selector of this.#suppressedSelectors.keys()) {
-			if (selector.startsWith(`${providerId}/`)) {
-				this.#suppressedSelectors.delete(selector);
+	refreshProviders(providerIds: readonly string[], strategy: ModelRefreshStrategy = "online"): Promise<void> {
+		return this.#enqueueRefresh(async () => {
+			const disabled = getDisabledProviderIdsFromSettings();
+			const providers = [...new Set(providerIds)].filter(provider => !disabled.has(provider));
+			const previousStates = new Map<string, ProviderDiscoveryState | undefined>();
+			for (const providerId of providers) {
+				const credentialSource = this.#keylessProviders.has(providerId)
+					? "keyless"
+					: this.authStorage.getCredentialSource(providerId);
+				if (credentialSource) this.#lastCredentialSources.set(providerId, credentialSource);
+				const previous = this.#providerDiscoveryStates.get(providerId);
+				previousStates.set(providerId, previous);
+				this.#providerDiscoveryStates.set(providerId, {
+					provider: providerId,
+					status: "checking",
+					optional: previous?.optional ?? false,
+					stale: previous?.stale ?? true,
+					fetchedAt: previous?.fetchedAt,
+					models: previous?.models ?? [],
+				});
+				for (const selector of this.#suppressedSelectors.keys()) {
+					if (selector.startsWith(`${providerId}/`)) this.#suppressedSelectors.delete(selector);
+				}
 			}
-		}
-		await this.#refreshRuntimeDiscoveries(strategy, new Set([providerId]));
+
+			try {
+				for (let index = 0; index < providers.length; index += 4) {
+					await this.#refreshRuntimeDiscoveries(strategy, new Set(providers.slice(index, index + 4)));
+				}
+			} finally {
+				for (const providerId of providers) {
+					if (this.#providerDiscoveryStates.get(providerId)?.status !== "checking") continue;
+					const previous = previousStates.get(providerId);
+					if (previous) this.#providerDiscoveryStates.set(providerId, previous);
+					else this.#providerDiscoveryStates.delete(providerId);
+				}
+			}
+		});
 	}
 
 	#reloadStaticModels(): void {
@@ -918,6 +1008,9 @@ export class ModelRegistry {
 		}
 		this.#providerOverrides.clear();
 		this.#modelOverrides.clear();
+		this.#modelAllowlists.clear();
+		this.#pickerMetadata.clear();
+		this.#lastCredentialSources.clear();
 		this.#equivalenceConfig = undefined;
 		this.#configError = undefined;
 		this.#providerDiscoveryStates.clear();
@@ -937,6 +1030,8 @@ export class ModelRegistry {
 			models: customModels = [],
 			overrides = new Map(),
 			modelOverrides = new Map(),
+			modelAllowlists = new Map(),
+			pickerMetadata = new Map(),
 			keylessProviders = new Set(),
 			discoverableProviders = [],
 			configuredProviders = new Set(),
@@ -950,6 +1045,8 @@ export class ModelRegistry {
 		this.#customModelOverlays = customModels;
 		this.#providerOverrides = overrides;
 		this.#modelOverrides = modelOverrides;
+		this.#modelAllowlists = modelAllowlists;
+		this.#pickerMetadata = pickerMetadata;
 		this.#equivalenceConfig = equivalence;
 
 		this.#addImplicitDiscoverableProviders(configuredProviders);
@@ -960,7 +1057,7 @@ export class ModelRegistry {
 		// Merge runtime extension models so they survive refresh() cycles
 		const combined = this.#mergeCustomModels(withConfigModels, this.#runtimeModelOverlays);
 
-		this.#models = this.#applyModelOverrides(combined, this.#modelOverrides);
+		this.#models = this.#applyProviderModelAllowlists(this.#applyModelOverrides(combined, this.#modelOverrides));
 		this.#rebuildCanonicalIndex();
 	}
 
@@ -1031,6 +1128,13 @@ export class ModelRegistry {
 			}
 		}
 		return merged;
+	}
+
+	#applyProviderModelAllowlists(models: Model<Api>[]): Model<Api>[] {
+		return models.filter(model => {
+			const allowlist = this.#modelAllowlists.get(model.provider);
+			return !allowlist || allowlist.has(model.id);
+		});
 	}
 
 	#loadCachedDiscoverableModels(): Model<Api>[] {
@@ -1159,12 +1263,18 @@ export class ModelRegistry {
 
 		const overrides = new Map<string, ProviderOverride>();
 		const allModelOverrides = new Map<string, Map<string, ModelOverride>>();
+		const modelAllowlists = new Map<string, Set<string>>();
+		const pickerMetadata = new Map<string, ProviderPickerMetadata>();
 		const keylessProviders = new Set<string>();
 		const discoverableProviders: DiscoveryProviderConfig[] = [];
 		const providerEntries = Object.entries(value.providers ?? {});
 		const configuredProviders = new Set(Object.keys(value.providers ?? {}));
 
 		for (const [providerName, providerConfig] of providerEntries) {
+			if (providerConfig.modelAllowlist) {
+				modelAllowlists.set(providerName, new Set(providerConfig.modelAllowlist));
+			}
+			if (providerConfig.picker) pickerMetadata.set(providerName, providerConfig.picker);
 			// Always set overrides when baseUrl/headers/apiKey/compat are present
 			if (providerConfig.baseUrl || providerConfig.headers || providerConfig.apiKey || providerConfig.compat) {
 				overrides.set(providerName, {
@@ -1211,6 +1321,8 @@ export class ModelRegistry {
 			models: this.#parseModels(value),
 			overrides,
 			modelOverrides: allModelOverrides,
+			modelAllowlists,
+			pickerMetadata,
 			keylessProviders,
 			discoverableProviders,
 			configuredProviders,
@@ -1274,7 +1386,7 @@ export class ModelRegistry {
 		const withConfigModels = this.#mergeCustomModels(resolved, this.#customModelOverlays);
 		// Merge runtime extension models so they survive online discovery completion
 		const combined = this.#mergeCustomModels(withConfigModels, this.#runtimeModelOverlays);
-		this.#models = this.#applyModelOverrides(combined, this.#modelOverrides);
+		this.#models = this.#applyProviderModelAllowlists(this.#applyModelOverrides(combined, this.#modelOverrides));
 		this.#rebuildCanonicalIndex();
 	}
 
@@ -1322,9 +1434,11 @@ export class ModelRegistry {
 		});
 		const result = await manager.refresh(strategy);
 		const status = discoveryError
-			? result.models.length > 0
-				? "cached"
-				: "unavailable"
+			? isProviderAuthenticationFailure(discoveryError)
+				? "unauthenticated"
+				: result.models.length > 0
+					? "cached"
+					: "unavailable"
 			: !result.stale && strategy !== "offline"
 				? "ok"
 				: cached
@@ -1471,7 +1585,29 @@ export class ModelRegistry {
 			selected(descriptor.providerId) ? this.getApiKeyForProvider(descriptor.providerId) : undefined;
 		const [standardProviderKeys, specialKeys] = await Promise.all([
 			Promise.all(PROVIDER_DESCRIPTORS.map(peekKey)),
-			Promise.all(specialProviderDescriptors.map(resolveSpecialKey)),
+			Promise.all(
+				specialProviderDescriptors.map(async descriptor => {
+					try {
+						return await resolveSpecialKey(descriptor);
+					} catch (error) {
+						if (selected(descriptor.providerId)) {
+							const previous = this.#providerDiscoveryStates.get(descriptor.providerId);
+							this.#providerDiscoveryStates.set(descriptor.providerId, {
+								provider: descriptor.providerId,
+								status: isProviderAuthenticationFailure(error instanceof Error ? error.message : String(error))
+									? "unauthenticated"
+									: "unavailable",
+								optional: false,
+								stale: true,
+								fetchedAt: previous?.fetchedAt,
+								models: previous?.models ?? [],
+								error: error instanceof Error ? error.message : String(error),
+							});
+						}
+						return undefined;
+					}
+				}),
+			),
 		]);
 		const options: ModelManagerOptions<Api>[] = [];
 		for (let i = 0; i < PROVIDER_DESCRIPTORS.length; i++) {
@@ -1484,6 +1620,16 @@ export class ModelRegistry {
 						baseUrl: this.getProviderBaseUrl(descriptor.providerId),
 					}),
 				);
+			} else if (selected(descriptor.providerId) && this.authStorage.getCredentialSource(descriptor.providerId)) {
+				const previous = this.#providerDiscoveryStates.get(descriptor.providerId);
+				this.#providerDiscoveryStates.set(descriptor.providerId, {
+					provider: descriptor.providerId,
+					status: "unauthenticated",
+					optional: false,
+					stale: true,
+					fetchedAt: previous?.fetchedAt,
+					models: previous?.models ?? [],
+				});
 			}
 		}
 
@@ -1554,14 +1700,19 @@ export class ModelRegistry {
 				previous && (previous.status === "ok" || previous.status === "cached") && previous.models.length > 0
 					? previous
 					: undefined;
+			const failureReason = error instanceof Error ? error.message : String(error);
 			this.#providerDiscoveryStates.set(options.providerId, {
 				provider: options.providerId,
-				status: retained ? "cached" : "unavailable",
+				status: isProviderAuthenticationFailure(failureReason)
+					? "unauthenticated"
+					: retained
+						? "cached"
+						: "unavailable",
 				optional: false,
 				stale: true,
 				fetchedAt: retained?.fetchedAt,
 				models: retained?.models ?? [],
-				error: error instanceof Error ? error.message : String(error),
+				error: failureReason,
 			});
 			logger.warn("model discovery failed for provider", {
 				provider: options.providerId,
@@ -1887,9 +2038,11 @@ export class ModelRegistry {
 	}
 
 	#applyProviderModelOverrides(provider: string, models: Model<Api>[]): Model<Api>[] {
+		const allowlist = this.#modelAllowlists.get(provider);
+		const allowedModels = allowlist ? models.filter(model => allowlist.has(model.id)) : models;
 		const overrides = this.#modelOverrides.get(provider);
-		if (!overrides || overrides.size === 0) return models;
-		return models.map(model => {
+		if (!overrides || overrides.size === 0) return allowedModels;
+		return allowedModels.map(model => {
 			const override = overrides.get(model.id);
 			if (!override) return model;
 			return applyModelOverride(model, override);
@@ -2140,6 +2293,42 @@ export class ModelRegistry {
 
 	getProviderDiscoveryState(provider: string): ProviderDiscoveryState | undefined {
 		return this.#providerDiscoveryStates.get(provider);
+	}
+
+	getProviderPickerMetadata(provider: string): ProviderPickerMetadata | undefined {
+		return this.#pickerMetadata.get(provider);
+	}
+
+	getProviderAccessState(provider: string): ProviderAccessState {
+		const groupId = this.#pickerMetadata.get(provider)?.groupId;
+		const discovery =
+			this.#providerDiscoveryStates.get(provider) ??
+			(groupId
+				? [...this.#pickerMetadata.entries()]
+						.filter(([, metadata]) => metadata.groupId === groupId)
+						.map(([groupProvider]) => this.#providerDiscoveryStates.get(groupProvider))
+						.find(Boolean)
+				: undefined);
+		const credentialSource: ProviderCredentialSource | undefined = this.#keylessProviders.has(provider)
+			? "keyless"
+			: (this.authStorage.getCredentialSource(provider) ?? this.#lastCredentialSources.get(provider));
+		const catalogFreshness = discovery?.stale ? "stale" : discovery?.status === "ok" ? "fresh" : "none";
+		let status: ProviderAccessStatus;
+		if (!credentialSource) status = "unconfigured";
+		else if (discovery?.status === "checking") status = "checking";
+		else if (discovery?.status === "unauthenticated") status = "reauth-required";
+		else if (discovery?.status === "unavailable" || discovery?.status === "cached") status = "unreachable";
+		else if (discovery?.status === "ok") status = "connected";
+		else status = "configured-unverified";
+		return {
+			provider,
+			credentialSource,
+			status,
+			catalogFreshness,
+			failureReason: sanitizeProviderFailure(discovery?.error),
+			verifiedAt: discovery?.status === "ok" ? discovery.fetchedAt : undefined,
+			selectable: (status === "connected" || status === "configured-unverified") && !discovery?.stale,
+		};
 	}
 
 	/**

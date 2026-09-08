@@ -134,14 +134,14 @@ test("refresh cannot change the exact model held by an open confirmation", async
 	selector.handleInput("\t");
 	await registry.refreshProvider("test-cloud");
 	await Bun.sleep(10);
+	selector.handleInput("\r");
 	const gate = Promise.withResolvers<void>();
 	response.wait = gate.promise;
 	response.ids = ["replacement-model"];
-	selector.handleInput("\x12");
-	selector.handleInput("\r");
+	const refresh = registry.refreshProvider("test-cloud");
 	gate.resolve();
 	response.wait = undefined;
-	await registry.refreshProvider("test-cloud");
+	await refresh;
 	await Bun.sleep(10);
 	selector.handleInput("\r");
 	selector.handleInput("\r");
@@ -204,7 +204,7 @@ test("an auto-discovered local provider remains visible with a real cached outag
 	});
 });
 
-test("explicitly configured unavailable local runtimes remain actionable", async () => {
+test("explicitly configured unavailable local runtimes remain visible but disabled", async () => {
 	const { registry, response } = await harness({
 		"lm-studio": {
 			baseUrl: "http://configured.invalid/v1",
@@ -216,13 +216,14 @@ test("explicitly configured unavailable local runtimes remain actionable", async
 	response.fail = true;
 	await registry.refreshProvider("lm-studio");
 	expect(registry.getProviderInventory()).toContain("lm-studio");
+	const onSelect = vi.fn();
 	const selector = new ModelSelectorComponent(
 		{ requestRender: vi.fn() } as unknown as TUI,
 		undefined,
 		Settings.isolated(),
 		registry,
 		[],
-		() => {},
+		onSelect,
 		() => {},
 	);
 	await Bun.sleep(30);
@@ -231,7 +232,10 @@ test("explicitly configured unavailable local runtimes remain actionable", async
 	const text = Bun.stripANSI(selector.render(160).join("\n"));
 	expect(text).toContain("LM Studio: controlled outage");
 	expect(text).toContain("Ctrl+R: retry");
-	expect(text).not.toContain("Cached model list");
+	expect(text).toContain("Cached model list");
+	expect(text).toContain("[lm-studio/test-model] unavailable");
+	selector.handleInput("\r");
+	expect(onSelect).not.toHaveBeenCalled();
 });
 
 test("stored but unusable cloud credentials report authentication required after refresh", async () => {
