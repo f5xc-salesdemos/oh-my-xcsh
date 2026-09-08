@@ -1,6 +1,9 @@
+import { createHash, randomUUID } from "node:crypto";
 import * as path from "node:path";
+import type { AssistantMessage } from "@f5-sales-demo/pi-ai";
 import type { ExtensionAPI, ExtensionContext, UserPromptKind } from "@f5-sales-demo/xcsh";
 import { HerdrClient } from "../../../herdr/client";
+import { finalAnswerText } from "../../../session/final-answer";
 
 /**
  * herdr integration (bundled, default-on).
@@ -10,7 +13,7 @@ import { HerdrClient } from "../../../herdr/client";
  * blocked indicator.
  *
  * Transport: herdr injects `HERDR_SOCKET_PATH` into every pane, so state is
- * reported over herdr's protocol-19 JSONL socket via the shared `HerdrClient`
+ * reported over Herdr's supported JSONL socket protocol via the shared `HerdrClient`
  * (see `../../../herdr/client`) — the same client `herdr-terminal` uses. Each
  * request reconnects independently, validates the `ping` protocol version
  * before the first real request, and awaits herdr's typed response before
@@ -62,9 +65,13 @@ const METADATA_METHOD = "pane.report_metadata";
 const SESSION_METHOD = "pane.report_agent_session";
 const HEARTBEAT_METHOD = "pane.report_agent_heartbeat";
 const RELEASE_METHOD = "pane.release_agent";
+const TURN_REPORT_METHOD = "agent.turn.report";
 const SOCKET_TIMEOUT_MS = 2000;
 const HEARTBEAT_INTERVAL_MS = 10_000;
 const PHASE_LABEL_TTL_MS = 60_000;
+const RESULT_MAX_CHARS = 80;
+const SEMANTIC_RESULT_MAX_BYTES = 8_000;
+const TURN_ENTRY_TYPE = "herdr.semantic-turn";
 const SETTLED_TURN_RECONCILE_DELAY_MS = 25;
 const PROMPT_BLOCKED_REASONS = {
 	select: "selection required",
@@ -79,6 +86,60 @@ function getPromptBlockedReason(kind: unknown): string {
 	return "user input required";
 }
 
+function boundedResult(message: AssistantMessage | undefined): string | undefined {
+	if (message?.stopReason !== "stop") return undefined;
+	const result = finalAnswerText(message).replaceAll(/\s+/g, " ").trim().slice(0, RESULT_MAX_CHARS).trim();
+	return result || undefined;
+}
+
+function boundedSemanticResult(message: AssistantMessage | undefined): string {
+	if (message?.stopReason !== "stop") return "";
+	let result = finalAnswerText(message).trim();
+	while (Buffer.byteLength(result) > SEMANTIC_RESULT_MAX_BYTES) result = result.slice(0, -1);
+	return result;
+}
+
+interface PersistedTurn {
+	sessionId: string;
+	turnId: string;
+	generation: number;
+	eventRevision?: number;
+	state?: "starting" | "working" | "waiting_input" | "completed" | "failed" | "cancelled" | "interrupted";
+	result?: string;
+	reason?: string;
+	resultDigest?: string;
+	delivered?: boolean;
+}
+
+function persistedTurns(ctx: ExtensionContext): PersistedTurn[] {
+	try {
+		const entries = ctx.sessionManager?.getEntries?.() as unknown[] | undefined;
+		return (entries ?? []).flatMap(entry => {
+			if (typeof entry !== "object" || entry === null) return [];
+			const record = entry as Record<string, unknown>;
+			if (record.type !== "custom" || record.customType !== TURN_ENTRY_TYPE) return [];
+			if (typeof record.data !== "object" || record.data === null) return [];
+			const turn = record.data as Record<string, unknown>;
+			if (typeof turn.sessionId !== "string" || typeof turn.turnId !== "string") return [];
+			return [
+				{
+					sessionId: turn.sessionId,
+					turnId: turn.turnId,
+					generation: typeof turn.generation === "number" ? turn.generation : 0,
+					eventRevision: typeof turn.eventRevision === "number" ? turn.eventRevision : undefined,
+					state: typeof turn.state === "string" ? (turn.state as PersistedTurn["state"]) : undefined,
+					result: typeof turn.result === "string" ? turn.result : undefined,
+					reason: typeof turn.reason === "string" ? turn.reason : undefined,
+					resultDigest: typeof turn.resultDigest === "string" ? turn.resultDigest : undefined,
+					delivered: turn.delivered === true,
+				},
+			];
+		});
+	} catch {
+		return [];
+	}
+}
+
 // Reused across calls for the life of the extension so `ensureProtocol()`'s
 // `ping` validation happens at most once per socket path, not once per frame.
 let cachedClient: HerdrClient | undefined;
@@ -91,7 +152,7 @@ function getHerdrClient(socketPath: string): HerdrClient {
 }
 
 /**
- * Send one JSON-RPC request to herdr over its protocol-19 socket and await the
+ * Send one JSON-RPC request to Herdr over its negotiated socket and await the
  * typed response. Every failure path (transport error, timeout, protocol
  * mismatch) is reported via `onError` without throwing, so a dead or
  * incompatible herdr never disturbs the agent.
@@ -153,13 +214,19 @@ export default function herdrReporter(pi: ExtensionAPI): void {
 	// Once the normalized contract is observed it is authoritative. The legacy
 	// event mappings remain only for older hosts that load this bundled extension.
 	let normalizedPhasesObserved = false;
+	let currentTurnId = 0;
+	let lastNormalizedEventKey: string | undefined;
+	let pendingSuccessfulResult: string | undefined;
+	let pendingSemanticResult = "";
+	let activeSemanticTurn: PersistedTurn | undefined;
+	let semanticRevision = 0;
 	// Last session ref already delivered, so repeated lifecycle events do not
 	// re-send an unchanged ref every turn.
 	let lastSessionRefKey: string | undefined;
 	// Herdr only anchors a new full-lifecycle authority after the first session
 	// reference identifies how the session began. XCSH creates that reference
 	// lazily, so retain the startup marker until there is a concrete ref to send.
-	let pendingSessionStartSource: "startup" | undefined = "startup";
+	let pendingSessionStartSource: "startup" | "new" | "resume" | "fork" | undefined = "startup";
 	// `agent_end` is the primary completion signal. Keep one deferred check from
 	// `turn_end` as well: some interactive UI paths render the completed response
 	// before their agent-end extension callback has drained. The check consults
@@ -174,13 +241,22 @@ export default function herdrReporter(pi: ExtensionAPI): void {
 	// Serializes frames: herdr compares `seq` across all methods for this source,
 	// so frames must reach it in the order they were generated.
 	let queue: Promise<void> = Promise.resolve();
+	let latestContext: ExtensionContext | undefined;
+	let trackingWarningShown = false;
 
 	pi.setLabel(HERDR_AGENT_LABEL);
 
 	const onError = (err: unknown): void => {
+		const message = err instanceof Error ? err.message : String(err);
 		pi.logger.debug("herdr report failed", {
-			error: err instanceof Error ? err.message : String(err),
+			error: message,
 		});
+		const ui = (latestContext as { ui?: ExtensionContext["ui"] } | undefined)?.ui;
+		ui?.setStatus("herdr-tracking", "Herdr tracking degraded");
+		if (!trackingWarningShown) {
+			trackingWarningShown = true;
+			ui?.notify(`Herdr semantic tracking is degraded: ${message}`, "warning");
+		}
 	};
 
 	/** Chain a frame onto the tail of the send queue. Never rejects. */
@@ -201,6 +277,80 @@ export default function herdrReporter(pi: ExtensionAPI): void {
 				.then(() => undefined)
 				.catch(onError),
 		);
+	};
+
+	const reportSemanticTurn = (
+		state: "starting" | "working" | "waiting_input" | "completed" | "failed" | "cancelled" | "interrupted",
+		options: { result?: string; reason?: string } = {},
+	): Promise<void> => {
+		const executionId = process.env.HERDR_EXECUTION_ID;
+		if (!executionId || !activeSemanticTurn) return Promise.resolve();
+		const revision = ++semanticRevision;
+		const event: PersistedTurn = {
+			...activeSemanticTurn,
+			eventRevision: revision,
+			state,
+			...(options.result === undefined
+				? {}
+				: { result: options.result, resultDigest: createHash("sha256").update(options.result).digest("hex") }),
+			...(options.reason === undefined ? {} : { reason: options.reason }),
+		};
+		pi.appendEntry(TURN_ENTRY_TYPE, { ...event, delivered: false });
+		return deliverSemanticEvent(event);
+	};
+
+	const deliverSemanticEvent = (event: PersistedTurn): Promise<void> => {
+		const socketPath = process.env.HERDR_SOCKET_PATH;
+		const executionId = process.env.HERDR_EXECUTION_ID;
+		if (!socketPath || !executionId || event.eventRevision === undefined || event.state === undefined) {
+			return Promise.resolve();
+		}
+		const frame = {
+			execution_id: executionId,
+			pane_id: paneId,
+			producer: HERDR_AGENT_LABEL,
+			session_id: event.sessionId,
+			turn_id: event.turnId,
+			generation: event.generation,
+			event_revision: event.eventRevision,
+			state: event.state,
+			...(event.result === undefined ? {} : { result: event.result, result_digest: event.resultDigest }),
+			...(event.reason === undefined ? {} : { reason: event.reason }),
+		};
+		return enqueue(async () => {
+			const client = getHerdrClient(socketPath);
+			try {
+				await client.ensureProtocol();
+				if (!client.hasCapability("agent_turn_journal")) {
+					onError(new Error("Herdr does not advertise agent_turn_journal; semantic tracking is degraded"));
+					return;
+				}
+				await client.request<Record<string, unknown>>(TURN_REPORT_METHOD, frame);
+				pi.appendEntry(TURN_ENTRY_TYPE, { ...event, delivered: true });
+				(latestContext as { ui?: ExtensionContext["ui"] } | undefined)?.ui?.setStatus("herdr-tracking", undefined);
+			} catch (err) {
+				onError(err);
+			}
+		});
+	};
+
+	const beginSemanticTurn = async (ctx: ExtensionContext): Promise<void> => {
+		const sessionId = ctx.sessionManager?.getSessionId?.();
+		if (typeof sessionId !== "string" || !sessionId) return;
+		activeSemanticTurn = { sessionId, turnId: randomUUID(), generation: 0 };
+		semanticRevision = 0;
+		pendingSemanticResult = "";
+		pi.appendEntry(TURN_ENTRY_TYPE, { ...activeSemanticTurn, eventRevision: 0 });
+		await reportSemanticTurn("starting");
+	};
+
+	const finishSemanticTurn = async (
+		state: "completed" | "failed" | "cancelled" | "interrupted",
+		options: { result?: string; reason?: string } = {},
+	): Promise<void> => {
+		if (!activeSemanticTurn) return;
+		await reportSemanticTurn(state, options);
+		activeSemanticTurn = undefined;
 	};
 
 	const report = (state: "idle" | "working" | "blocked", message?: string): Promise<void> =>
@@ -289,11 +439,12 @@ export default function herdrReporter(pi: ExtensionAPI): void {
 	// agent_start, and a ref missed there would otherwise be lost until the next
 	// turn — long enough for a restart to lose the pane. Unchanged refs are
 	// suppressed, so the extra call sites cost nothing on the wire.
-	const reportSession = (ctx: ExtensionContext): Promise<void> => {
+	const reportSession = (ctx: ExtensionContext, sessionStartSource?: "new" | "resume" | "fork"): Promise<void> => {
 		const socketPath = process.env.HERDR_SOCKET_PATH;
 		if (!socketPath) {
 			return Promise.resolve();
 		}
+		if (sessionStartSource !== undefined) pendingSessionStartSource = sessionStartSource;
 		let sessionRef: Record<string, unknown> | undefined;
 		try {
 			const file = ctx.sessionManager?.getSessionFile?.();
@@ -313,7 +464,7 @@ export default function herdrReporter(pi: ExtensionAPI): void {
 			return Promise.resolve();
 		}
 		const refKey = JSON.stringify(sessionRef);
-		if (refKey === lastSessionRefKey) {
+		if (refKey === lastSessionRefKey && sessionStartSource === undefined) {
 			return Promise.resolve();
 		}
 		lastSessionRefKey = refKey;
@@ -347,9 +498,53 @@ export default function herdrReporter(pi: ExtensionAPI): void {
 
 	// Announce presence and session identity as soon as the session is initialized.
 	pi.on("session_start", async (_event, ctx) => {
+		latestContext = ctx;
 		startHeartbeat();
 		await report("idle");
 		await reportSession(ctx);
+		const persisted = persistedTurns(ctx);
+		const byRevision = new Map<string, PersistedTurn>();
+		for (const event of persisted) {
+			if (event.eventRevision !== undefined && event.state !== undefined) {
+				byRevision.set(`${event.sessionId}:${event.turnId}:${event.generation}:${event.eventRevision}`, event);
+			}
+		}
+		const events = [...byRevision.values()];
+		for (const event of events.filter(event => !event.delivered)) await deliverSemanticEvent(event);
+		const last = events.at(-1);
+		const terminal = last && ["completed", "failed", "cancelled", "interrupted"].includes(last.state ?? "");
+		if (last && !terminal) {
+			activeSemanticTurn = last;
+			semanticRevision = last.eventRevision ?? 0;
+			await finishSemanticTurn("interrupted", { reason: "XCSH restarted before semantic settlement" });
+		}
+	});
+
+	pi.on("before_agent_start", async (_event, ctx) => {
+		latestContext = ctx;
+		if (!activeSemanticTurn) await beginSemanticTurn(ctx);
+	});
+
+	pi.on("session_before_switch", async () => {
+		await finishSemanticTurn("interrupted", { reason: "XCSH switched sessions before semantic settlement" });
+	});
+
+	pi.on("session_before_branch", async () => {
+		await finishSemanticTurn("interrupted", { reason: "XCSH forked before semantic settlement" });
+	});
+
+	pi.on("session_switch", async (event, ctx) => {
+		latestContext = ctx;
+		currentTurnId = 0;
+		lastNormalizedEventKey = undefined;
+		await reportSession(ctx, event.reason);
+	});
+
+	pi.on("session_branch", async (_event, ctx) => {
+		latestContext = ctx;
+		currentTurnId = 0;
+		lastNormalizedEventKey = undefined;
+		await reportSession(ctx, "fork");
 	});
 
 	// Busy while the agent loop is streaming a response. Re-report session identity
@@ -364,6 +559,12 @@ export default function herdrReporter(pi: ExtensionAPI): void {
 	// This is also the first point where a lazily-created session file is certain
 	// to exist, so it is the backstop for capturing the resume ref.
 	pi.on("agent_end", async (_event, ctx) => {
+		const messages = _event.messages;
+		const lastAssistant = [...messages]
+			.reverse()
+			.find((message): message is AssistantMessage => message.role === "assistant");
+		pendingSuccessfulResult = boundedResult(lastAssistant);
+		pendingSemanticResult = boundedSemanticResult(lastAssistant);
 		if (!normalizedPhasesObserved) await report(promptBlockedReason ? "blocked" : "idle", promptBlockedReason);
 		await reportSession(ctx);
 	});
@@ -395,6 +596,14 @@ export default function herdrReporter(pi: ExtensionAPI): void {
 
 	pi.on("turn_phase", async (event, ctx) => {
 		normalizedPhasesObserved = true;
+		if (event.turnId < currentTurnId) return;
+		const eventKey = `${event.turnId}:${event.phase}`;
+		if (eventKey === lastNormalizedEventKey) return;
+		if (event.turnId > currentTurnId) {
+			currentTurnId = event.turnId;
+			pendingSuccessfulResult = undefined;
+		}
+		lastNormalizedEventKey = eventKey;
 		const state =
 			event.phase === "awaiting_user"
 				? "blocked"
@@ -402,7 +611,39 @@ export default function herdrReporter(pi: ExtensionAPI): void {
 					? "working"
 					: "idle";
 		await report(state, event.phase === "awaiting_user" ? "user input required" : undefined);
-		await setPhaseLabel(event.phase, state);
+		const turnStatus =
+			event.phase === "idle"
+				? "completed"
+				: event.phase === "error"
+					? "failed"
+					: event.phase === "cancelled"
+						? "cancelled"
+						: event.phase === "awaiting_user"
+							? "waiting_input"
+							: "working";
+		await reportMetadata({
+			state_labels: { [state]: event.phase },
+			tokens: {
+				xcsh_turn_id: String(event.turnId),
+				xcsh_turn_status: turnStatus,
+				xcsh_result: event.phase === "idle" ? (pendingSuccessfulResult ?? null) : null,
+			},
+			ttl_ms: PHASE_LABEL_TTL_MS,
+		});
+		if (event.phase === "idle") {
+			await finishSemanticTurn("completed", { result: pendingSemanticResult });
+		} else if (event.phase === "error") {
+			await finishSemanticTurn("failed", { reason: "XCSH turn failed" });
+		} else if (event.phase === "cancelled") {
+			await finishSemanticTurn("cancelled", { reason: "XCSH turn cancelled" });
+		} else if (event.phase === "awaiting_user") {
+			await reportSemanticTurn("waiting_input", { reason: "user input required" });
+		} else {
+			await reportSemanticTurn("working");
+		}
+		if (event.phase === "idle" || event.phase === "error" || event.phase === "cancelled") {
+			pendingSuccessfulResult = undefined;
+		}
 		await reportSession(ctx);
 	});
 
@@ -447,9 +688,10 @@ export default function herdrReporter(pi: ExtensionAPI): void {
 	});
 
 	// Relinquish pane authority so herdr stops showing xcsh once we exit.
-	pi.on("session_shutdown", () => {
+	pi.on("session_shutdown", async () => {
 		stopHeartbeat();
-		void send(RELEASE_METHOD, {
+		await finishSemanticTurn("interrupted", { reason: "XCSH shut down before semantic settlement" });
+		await send(RELEASE_METHOD, {
 			pane_id: paneId,
 			source: HERDR_SOURCE,
 			agent: HERDR_AGENT_LABEL,

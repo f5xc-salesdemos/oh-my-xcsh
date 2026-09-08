@@ -17,6 +17,7 @@ interface MockPi {
 	execCalls: Array<{ command: string; args: string[] }>;
 	labels: string[];
 	debugCalls: Array<{ message: string; fields: Record<string, unknown> }>;
+	entries: Array<{ customType: string; data: unknown }>;
 }
 
 function makeMockPi(): MockPi {
@@ -24,6 +25,7 @@ function makeMockPi(): MockPi {
 	const execCalls: Array<{ command: string; args: string[] }> = [];
 	const labels: string[] = [];
 	const debugCalls: Array<{ message: string; fields: Record<string, unknown> }> = [];
+	const entries: Array<{ customType: string; data: unknown }> = [];
 
 	const pi = {
 		on(event: string, handler: AnyHandler) {
@@ -31,6 +33,9 @@ function makeMockPi(): MockPi {
 		},
 		setLabel(label: string) {
 			labels.push(label);
+		},
+		appendEntry(customType: string, data: unknown) {
+			entries.push({ customType, data });
 		},
 		exec(command: string, args: string[]) {
 			execCalls.push({ command, args });
@@ -46,7 +51,7 @@ function makeMockPi(): MockPi {
 		},
 	} as unknown as ExtensionAPI;
 
-	return { pi, handlers, execCalls, labels, debugCalls };
+	return { pi, handlers, execCalls, labels, debugCalls, entries };
 }
 
 const idleCtx = { isIdle: () => true } as unknown as ExtensionContext;
@@ -71,14 +76,16 @@ interface FakeHerdr {
 interface FakeHerdrOptions {
 	/** Methods whose connected socket is closed without a response. */
 	failMethods?: ReadonlySet<string>;
+	protocol?: number;
+	capabilities?: Record<string, boolean>;
 }
 
 /**
- * A throwaway Herdr protocol-19 socket server. Mirrors the real herdr handshake
+ * A throwaway Herdr socket server. Mirrors the real Herdr handshake
  * gate: the very first request on the server must be a `ping`, which is
  * answered with a matching `pong`; every other method is rejected with a
  * JSON-RPC error and NOT recorded until a successful ping has been observed.
- * This lets tests prove a client performs the protocol-19 handshake before
+ * This lets tests prove a client performs the negotiated handshake before
  * sending lifecycle frames, exactly as `HerdrClient.ensureProtocol()` does —
  * a client that skips the handshake (e.g. the old raw-socket transport) gets
  * every frame silently dropped by this gate and its request never appears in
@@ -109,7 +116,7 @@ function startFakeHerdr(options: FakeHerdrOptions = {}): Promise<FakeHerdr> {
 						handshakeDone = true;
 						pingOrders.push(order++);
 						sock.end(
-							`${JSON.stringify({ id: request.id, result: { type: "pong", protocol: 19, version: "test" } })}\n`,
+							`${JSON.stringify({ id: request.id, result: { type: "pong", protocol: options.protocol ?? 19, version: "test", capabilities: options.capabilities } })}\n`,
 						);
 					} else if (options.failMethods?.has(request.method)) {
 						// Model a failed transport after the protocol handshake. The reporter
@@ -180,6 +187,7 @@ const metadataParams = (
 	options: {
 		stateLabels?: Record<string, string>;
 		clearStateLabels?: boolean;
+		tokens?: Record<string, string | null>;
 		ttlMs?: number;
 	},
 ) => ({
@@ -189,6 +197,7 @@ const metadataParams = (
 	seq,
 	...(options.stateLabels ? { state_labels: options.stateLabels } : {}),
 	...(options.clearStateLabels ? { clear_state_labels: true } : {}),
+	...(options.tokens ? { tokens: options.tokens } : {}),
 	...(options.ttlMs !== undefined ? { ttl_ms: options.ttlMs } : {}),
 });
 
@@ -198,6 +207,7 @@ const baseSeq = (herdr: FakeHerdr): number => herdr.received[0]?.params.seq as n
 describe("herdr-reporter extension", () => {
 	const originalPaneId = process.env.HERDR_PANE_ID;
 	const originalSocket = process.env.HERDR_SOCKET_PATH;
+	const originalExecutionId = process.env.HERDR_EXECUTION_ID;
 
 	afterEach(() => {
 		vi.restoreAllMocks();
@@ -205,6 +215,8 @@ describe("herdr-reporter extension", () => {
 		else process.env.HERDR_PANE_ID = originalPaneId;
 		if (originalSocket === undefined) delete process.env.HERDR_SOCKET_PATH;
 		else process.env.HERDR_SOCKET_PATH = originalSocket;
+		if (originalExecutionId === undefined) delete process.env.HERDR_EXECUTION_ID;
+		else process.env.HERDR_EXECUTION_ID = originalExecutionId;
 	});
 
 	it("emits state-neutral heartbeats every 10 seconds and cancels them before release", async () => {
@@ -318,7 +330,7 @@ describe("herdr-reporter extension", () => {
 			expect(herdr.received[1]?.params).toEqual(reportParams("working", base + 1));
 			expect(herdr.received[2]?.method).toBe("pane.report_agent");
 			expect(herdr.received[2]?.params).toEqual(reportParams("idle", base + 2));
-			// The protocol-19 handshake (ping) must precede every report frame — the
+			// The negotiated handshake (ping) must precede every report frame — the
 			// fake server's gate refuses to record report/release methods until a
 			// ping has been observed, so any recorded frame is proof the handshake
 			// already happened.
@@ -357,6 +369,260 @@ describe("herdr-reporter extension", () => {
 			for (const sentinel of Object.values(privateSentinels)) {
 				expect(capturedFrames).not.toContain(sentinel);
 			}
+		} finally {
+			await herdr.close();
+		}
+	});
+
+	it("reports native turn identity and a bounded result only after successful semantic completion", async () => {
+		const herdr = await startFakeHerdr();
+		try {
+			process.env.HERDR_PANE_ID = "w1:p1";
+			process.env.HERDR_SOCKET_PATH = herdr.socketPath;
+			const { pi, handlers } = makeMockPi();
+			herdrReporter(pi);
+
+			await handlers.get("turn_phase")?.({ type: "turn_phase", phase: "submitting", turnId: 41 }, busyCtx);
+			await handlers.get("agent_end")?.(
+				{
+					messages: [
+						{
+							role: "assistant",
+							stopReason: "stop",
+							content: [
+								{ type: "text", phase: "commentary", text: "PRIVATE_PROGRESS" },
+								{ type: "text", phase: "final_answer", text: `  ${"result ".repeat(20)}\n` },
+							],
+						},
+					],
+				},
+				idleCtx,
+			);
+			await handlers.get("turn_phase")?.({ type: "turn_phase", phase: "idle", turnId: 41 }, idleCtx);
+
+			await waitFor(() => herdr.received.filter(frame => frame.method === "pane.report_metadata").length >= 2);
+			const metadata = herdr.received.filter(frame => frame.method === "pane.report_metadata");
+			expect(metadata[0]?.params.tokens).toEqual({
+				xcsh_result: null,
+				xcsh_turn_id: "41",
+				xcsh_turn_status: "working",
+			});
+			const completion = metadata[1]?.params.tokens as Record<string, string>;
+			expect(completion.xcsh_turn_id).toBe("41");
+			expect(completion.xcsh_turn_status).toBe("completed");
+			expect(completion.xcsh_result).toStartWith("result result");
+			expect(completion.xcsh_result.length).toBeLessThanOrEqual(80);
+			expect(JSON.stringify(herdr.received)).not.toContain("PRIVATE_PROGRESS");
+		} finally {
+			await herdr.close();
+		}
+	});
+
+	it("publishes a durable semantic result only through a tracked protocol-20 execution", async () => {
+		const herdr = await startFakeHerdr({ protocol: 20, capabilities: { agent_turn_journal: true } });
+		try {
+			process.env.HERDR_PANE_ID = "w1:p1";
+			process.env.HERDR_SOCKET_PATH = herdr.socketPath;
+			process.env.HERDR_EXECUTION_ID = "execution-1";
+			const { pi, handlers, entries } = makeMockPi();
+			const ctx = {
+				isIdle: () => true,
+				sessionManager: {
+					getSessionId: () => "session-1",
+					getSessionFile: () => "/tmp/session-1.jsonl",
+					getEntries: () => entries.map(({ customType, data }) => ({ type: "custom", customType, data })),
+				},
+			} as unknown as ExtensionContext;
+			herdrReporter(pi);
+
+			await handlers.get("before_agent_start")?.({ type: "before_agent_start", prompt: "private" }, ctx);
+			await handlers.get("turn_phase")?.({ type: "turn_phase", phase: "submitting", turnId: 1 }, ctx);
+			await handlers.get("agent_end")?.(
+				{
+					messages: [
+						{ role: "assistant", stopReason: "stop", content: [{ type: "text", text: "durable result" }] },
+					],
+				},
+				ctx,
+			);
+			await handlers.get("turn_phase")?.({ type: "turn_phase", phase: "idle", turnId: 1 }, ctx);
+
+			await waitFor(() => herdr.received.filter(frame => frame.method === "agent.turn.report").length === 3);
+			const turns = herdr.received.filter(frame => frame.method === "agent.turn.report").map(frame => frame.params);
+			expect(turns.map(turn => turn.state)).toEqual(["starting", "working", "completed"]);
+			expect(turns.map(turn => turn.event_revision)).toEqual([1, 2, 3]);
+			expect(turns[0]?.session_id).toBe("session-1");
+			expect(turns[0]?.turn_id).toBeString();
+			expect(turns[2]?.turn_id).toBe(turns[0]?.turn_id);
+			expect(turns[2]?.result).toBe("durable result");
+			expect(turns[2]?.result_digest).toMatch(/^[0-9a-f]{64}$/);
+			expect(entries.at(-1)?.data).toMatchObject({ state: "completed", delivered: true });
+		} finally {
+			await herdr.close();
+		}
+	});
+
+	it("recovers a persisted open turn as interrupted without reporting false completion", async () => {
+		const herdr = await startFakeHerdr({ protocol: 20, capabilities: { agent_turn_journal: true } });
+		try {
+			process.env.HERDR_PANE_ID = "w1:p1";
+			process.env.HERDR_SOCKET_PATH = herdr.socketPath;
+			process.env.HERDR_EXECUTION_ID = "execution-1";
+			const { pi, handlers, entries } = makeMockPi();
+			entries.push(
+				{
+					customType: "herdr.semantic-turn",
+					data: {
+						sessionId: "session-1",
+						turnId: "stable-turn",
+						generation: 0,
+						eventRevision: 1,
+						state: "starting",
+						delivered: false,
+					},
+				},
+				{
+					customType: "herdr.semantic-turn",
+					data: {
+						sessionId: "session-1",
+						turnId: "stable-turn",
+						generation: 0,
+						eventRevision: 2,
+						state: "working",
+						delivered: false,
+					},
+				},
+			);
+			const ctx = {
+				isIdle: () => true,
+				sessionManager: {
+					getSessionId: () => "session-1",
+					getSessionFile: () => "/tmp/session-1.jsonl",
+					getEntries: () => entries.map(({ customType, data }) => ({ type: "custom", customType, data })),
+				},
+			} as unknown as ExtensionContext;
+			herdrReporter(pi);
+			await handlers.get("session_start")?.({}, ctx);
+
+			await waitFor(() => herdr.received.filter(frame => frame.method === "agent.turn.report").length === 3);
+			const reports = herdr.received.filter(frame => frame.method === "agent.turn.report");
+			expect(reports.slice(0, 2).map(frame => frame.params.event_revision)).toEqual([1, 2]);
+			const recovered = reports[2]?.params;
+			expect(recovered).toMatchObject({
+				session_id: "session-1",
+				turn_id: "stable-turn",
+				event_revision: 3,
+				state: "interrupted",
+			});
+			expect(recovered?.result).toBeUndefined();
+		} finally {
+			await herdr.close();
+		}
+	});
+
+	it("keeps wait, cancellation, and failure distinct from completion", async () => {
+		const herdr = await startFakeHerdr({ protocol: 20, capabilities: { agent_turn_journal: true } });
+		try {
+			process.env.HERDR_PANE_ID = "w1:p1";
+			process.env.HERDR_SOCKET_PATH = herdr.socketPath;
+			process.env.HERDR_EXECUTION_ID = "execution-1";
+			const { pi, handlers, entries } = makeMockPi();
+			const ctx = {
+				isIdle: () => false,
+				sessionManager: {
+					getSessionId: () => "session-1",
+					getSessionFile: () => "/tmp/session-1.jsonl",
+					getEntries: () => entries.map(({ customType, data }) => ({ type: "custom", customType, data })),
+				},
+			} as unknown as ExtensionContext;
+			herdrReporter(pi);
+
+			for (const [turnId, terminal] of [
+				[1, "error"],
+				[2, "cancelled"],
+			] as const) {
+				await handlers.get("before_agent_start")?.({ type: "before_agent_start", prompt: "private" }, ctx);
+				await handlers.get("turn_phase")?.({ type: "turn_phase", phase: "submitting", turnId }, ctx);
+				await handlers.get("turn_phase")?.({ type: "turn_phase", phase: "awaiting_user", turnId }, ctx);
+				await handlers.get("turn_phase")?.({ type: "turn_phase", phase: terminal, turnId }, ctx);
+			}
+			await waitFor(() => herdr.received.filter(frame => frame.method === "agent.turn.report").length === 8);
+			const turns = herdr.received.filter(frame => frame.method === "agent.turn.report").map(frame => frame.params);
+			expect(turns.map(turn => turn.state)).toEqual([
+				"starting",
+				"working",
+				"waiting_input",
+				"failed",
+				"starting",
+				"working",
+				"waiting_input",
+				"cancelled",
+			]);
+			expect(turns.every(turn => turn.result === undefined)).toBe(true);
+			expect(new Set(turns.map(turn => turn.turn_id)).size).toBe(2);
+		} finally {
+			await herdr.close();
+		}
+	});
+
+	it("preserves failure and cancellation outcomes without publishing partial results", async () => {
+		const herdr = await startFakeHerdr();
+		try {
+			process.env.HERDR_PANE_ID = "w1:p1";
+			process.env.HERDR_SOCKET_PATH = herdr.socketPath;
+			const { pi, handlers } = makeMockPi();
+			herdrReporter(pi);
+
+			for (const [turnId, phase, stopReason] of [
+				[51, "error", "error"],
+				[52, "cancelled", "aborted"],
+			] as const) {
+				await handlers.get("turn_phase")?.({ type: "turn_phase", phase: "submitting", turnId }, busyCtx);
+				await handlers.get("agent_end")?.(
+					{
+						messages: [
+							{ role: "assistant", stopReason, content: [{ type: "text", text: "PRIVATE_PARTIAL_RESULT" }] },
+						],
+					},
+					idleCtx,
+				);
+				await handlers.get("turn_phase")?.({ type: "turn_phase", phase, turnId }, idleCtx);
+			}
+
+			await waitFor(() => herdr.received.filter(frame => frame.method === "pane.report_metadata").length >= 4);
+			const terminal = herdr.received
+				.filter(frame => frame.method === "pane.report_metadata")
+				.map(frame => frame.params.tokens as Record<string, string | null>)
+				.filter(tokens => tokens?.xcsh_turn_status === "failed" || tokens?.xcsh_turn_status === "cancelled");
+			expect(terminal).toEqual([
+				{ xcsh_result: null, xcsh_turn_id: "51", xcsh_turn_status: "failed" },
+				{ xcsh_result: null, xcsh_turn_id: "52", xcsh_turn_status: "cancelled" },
+			]);
+			expect(JSON.stringify(herdr.received)).not.toContain("PRIVATE_PARTIAL_RESULT");
+		} finally {
+			await herdr.close();
+		}
+	});
+
+	it("drops duplicate and stale normalized phase events so an older completion cannot overwrite a continuation", async () => {
+		const herdr = await startFakeHerdr();
+		try {
+			process.env.HERDR_PANE_ID = "w1:p1";
+			process.env.HERDR_SOCKET_PATH = herdr.socketPath;
+			const { pi, handlers } = makeMockPi();
+			herdrReporter(pi);
+
+			await handlers.get("turn_phase")?.({ type: "turn_phase", phase: "submitting", turnId: 61 }, busyCtx);
+			await handlers.get("turn_phase")?.({ type: "turn_phase", phase: "submitting", turnId: 61 }, busyCtx);
+			await handlers.get("turn_phase")?.({ type: "turn_phase", phase: "thinking", turnId: 62 }, busyCtx);
+			await handlers.get("turn_phase")?.({ type: "turn_phase", phase: "idle", turnId: 61 }, idleCtx);
+
+			await waitFor(() => herdr.received.filter(frame => frame.method === "pane.report_metadata").length >= 2);
+			const metadata = herdr.received.filter(frame => frame.method === "pane.report_metadata");
+			expect(metadata).toHaveLength(2);
+			const latestTokens = metadata[1]!.params.tokens as Record<string, string>;
+			expect(latestTokens.xcsh_turn_id).toBe("62");
+			expect(latestTokens.xcsh_turn_status).toBe("working");
 		} finally {
 			await herdr.close();
 		}
@@ -471,7 +737,7 @@ describe("herdr-reporter extension", () => {
 				agent: "xcsh",
 				seq: baseSeq(herdr),
 			});
-			// The release frame must also be preceded by the protocol-19 handshake.
+			// The release frame must also be preceded by the negotiated handshake.
 			expect(herdr.pingOrders.length).toBeGreaterThanOrEqual(1);
 			expect(herdr.received[0]!.order).toBeGreaterThan(herdr.pingOrders[0]!);
 		} finally {
@@ -728,6 +994,44 @@ describe("herdr-reporter extension", () => {
 			const sessions = herdr.received.filter(r => r.method === "pane.report_agent_session");
 			expect(sessions[0]?.params.session_start_source).toBe("startup");
 			expect(sessions[1]?.params.session_start_source).toBeUndefined();
+		} finally {
+			await herdr.close();
+		}
+	});
+
+	it("reports native resume and fork session transitions with their semantic start source", async () => {
+		const herdr = await startFakeHerdr();
+		try {
+			process.env.HERDR_PANE_ID = "w1:p1";
+			process.env.HERDR_SOCKET_PATH = herdr.socketPath;
+			const { pi, handlers } = makeMockPi();
+			let file = "/tmp/x/startup-session.jsonl";
+			const changingCtx = {
+				isIdle: () => true,
+				sessionManager: { getSessionFile: () => file, getSessionId: () => "" },
+			} as unknown as ExtensionContext;
+
+			herdrReporter(pi);
+			await handlers.get("session_start")?.({}, changingCtx);
+			file = "/tmp/x/resumed-session.jsonl";
+			await handlers.get("session_switch")?.(
+				{ type: "session_switch", reason: "resume", previousSessionFile: "/tmp/x/startup-session.jsonl" },
+				changingCtx,
+			);
+			file = "/tmp/x/forked-session.jsonl";
+			await handlers.get("session_branch")?.(
+				{ type: "session_branch", previousSessionFile: "/tmp/x/resumed-session.jsonl" },
+				changingCtx,
+			);
+
+			await waitFor(() => herdr.received.filter(frame => frame.method === "pane.report_agent_session").length === 3);
+			const sessions = herdr.received.filter(frame => frame.method === "pane.report_agent_session");
+			expect(sessions.map(frame => frame.params.session_start_source)).toEqual(["startup", "resume", "fork"]);
+			expect(sessions.map(frame => frame.params.agent_session_path)).toEqual([
+				"/tmp/x/startup-session.jsonl",
+				"/tmp/x/resumed-session.jsonl",
+				"/tmp/x/forked-session.jsonl",
+			]);
 		} finally {
 			await herdr.close();
 		}

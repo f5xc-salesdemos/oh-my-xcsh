@@ -1,0 +1,119 @@
+---
+title: "Herdr native signaling gap-closing plan"
+description: "Plan native XCSH semantic-turn signaling through Herdr to durable Control Manager acceptance without treating process exit as success."
+sidebar:
+  order: 3
+  label: "Herdr signaling plan"
+---
+
+**Status: PLAN COMPLETE; XCSH FEATURE INCOMPLETE.** This is an implementation and acceptance plan, not evidence that the feature is implemented, installed, or accepted. Every required work package and closure gate remains open until its stated evidence is attached. Deferring a required item leaves the feature incomplete.
+
+### Current delivery checklist
+
+- [x] Plan reviewed and XCSH issue [#3768](https://github.com/f5-sales-demo/xcsh/issues/3768) created.
+- [x] XCSH protocol 19–20 negotiation, capability gate, persisted turn UUID, semantic producer, and focused unit tests implemented in the review worktree.
+- [x] Herdr tracked execution and semantic-journal source implemented with focused integration coverage and a passing local `just check`.
+- [ ] XCSH and Herdr changes committed, reviewed, CI-green, and merged under each repository's governance.
+- [ ] Reproducible release artifacts identify source SHA, hash, protocol, and capabilities.
+- [ ] Released artifacts installed through the supported update path with rollback recorded.
+- [ ] Control Manager native XCSH consumer and required-child aggregation implemented by its separate owner.
+- [ ] Real Manager-to-Herdr-to-XCSH success/failure/wait/cancel/reconnect/cleanup/restart UAT passes through durable result acknowledgment.
+- [ ] Overall feature accepted. This box cannot be checked by completing this worker or by deferring any required box above.
+
+## What is proven now?
+
+| Area | Evidence | Current conclusion |
+| --- | --- | --- |
+| XCSH producer | The review worktree contains uncommitted reporter changes and 52 previously passing focused tests. | Unit-only partial work. Its 80-character result preview is display metadata, not a durable semantic result. It is not installed or end-to-end tested. |
+| Protocol compatibility | `packages/coding-agent/src/herdr/client.ts` pins protocol 19 and requires exact equality. Installed `/usr/local/bin/herdr` reports `herdr 0.9.4`; `herdr api schema` reports protocol 20. | Current installed reporting is incompatible and can fail silently because reporter errors are nonfatal. Release blocker. |
+| Herdr execution tracking | Installed Herdr exposes native `execution start/get/list/wait/cancel`. Current source persists bounded output, revisions, process states, duplicate admission, and restart loss. | Authoritative process evidence, but process exit is not successful semantic turn completion. |
+| XCSH identity | Sessions persist and support `--continue`, `--resume`, and `--fork`; `TurnPhaseEvent.turnId` is a process-local counter. | Session continuation exists, but turn identity is not stable across restart/reconnect. |
+| Herdr XCSH resume | Current Herdr source accepts `(herdr:xcsh, xcsh)` path/ID references and plans `xcsh --resume=<value>`. | The prior source allow-list gap is closed. Installed-build provenance and live resume/fork remain unproven. |
+| Control Manager | Current source has a durable journal/outbox/direct acknowledgment, generations, and response correlation for existing worker types. | Durable primitives exist, but `WORK_KINDS` lacks XCSH, as do a native XCSH consumer and feature-level required-gate aggregation. |
+| Live acceptance | No workload, install, restart, or activation was performed for this planning task. | End-to-end parity is unproven and the feature remains incomplete. |
+
+The installed Herdr binary inspected during planning had SHA-256 `c14df84087d3cd28e30c80d652c7fe42b73039497b771d454c9b1b69d36ceda`. A hash identifies that artifact but does not prove its source revision; closure requires reproducible build provenance.
+
+## Which invariants define parity?
+
+Three planes remain separate:
+
+1. **Herdr tracked execution** owns process admission, pane visibility, output drainage, exit/signal, cancellation request, and restart loss. It never translates exit zero, TUI idle, output silence, pane cleanup, or shutdown into semantic success.
+2. **XCSH semantic turns** own start, progress, waiting for input/approval, successful completion with bounded result, failure, cancellation, interruption, and continuation/fork identity.
+3. **Control Manager acceptance** owns durable task state, required-child aggregation, replay, supersession, delivery acknowledgment, and correlation of a visible response with the accepted result.
+
+Canonical identity is `(producer, session_id, turn_id, generation)`. The native persisted XCSH session supplies `session_id`. XCSH creates and persists `turn_id` before the first event and retains it across reconnect. `generation` distinguishes deliberate continuation/retry that supersedes older work. Pane/execution IDs are provenance, not semantic identity. Manager task association must be validated against server-owned pane/execution context; a free-form client task ID is not trusted alone.
+
+Events have a monotonic sequence/revision, state, timestamp, and optional bounded safe payload. Exact replay with the same identity, revision, and digest is idempotent; changed content at the same revision conflicts; older revisions cannot regress state. Terminal state is immutable, while a new generation may explicitly supersede it. Restart replays persisted events; unrecoverable active work becomes `interrupted`/`lost`, never `completed`.
+
+## What do statuses mean?
+
+| State | UI and Manager meaning | Required evidence |
+| --- | --- | --- |
+| `starting` | Turn identity is durable; work has not begun. | Created once before model/tool work. |
+| `working` | Turn is actively progressing. | May emit rate-limited progress or enter a wait. |
+| `waiting_input` | Human input/approval is required; neither failure nor completion. | Bounded safe reason; resumes to working or terminates by cancel/failure. |
+| `completed` | Native semantic settlement succeeded with a bounded result. | Emitted only after agent-end settlement, never inferred from idle/exit. |
+| `failed` | Semantic turn ended unsuccessfully. | Bounded safe reason; partial output cannot appear as success. |
+| `cancelled` | Requested cancellation reached terminal semantic state. | A cancellation request alone is not terminal evidence. |
+| `interrupted` / `lost` | Outcome cannot be proven. | Never success; requires continuation/retry or operator resolution. |
+| execution `exited` | Host process stopped; output drained or marked incomplete. | Process-only evidence, displayed separately from turn/task outcome. |
+
+UI surfaces show process state, semantic turn state, and feature acceptance independently. Display metadata may mirror safe status but is never an authoritative completion input.
+
+## Which ordered work packages close the gaps?
+
+1. **WP0 — Governed baselines and issue records (each project).** Preserve this worktree, base future implementation on current authoritative branches, and create issue-ready owner records from this plan. Record revisions, artifact identity, schemas, and acceptance criteria. Gate: clean isolated worktrees and approved issue links.
+2. **WP1 — Capability/protocol negotiation (XCSH, Herdr review).** Replace exact protocol 19 with an explicit supported range/set and capability discovery. Support 20 only after schema review; reject unknown versions visibly. Gate semantic calls on capability, not guesses. Dependency: WP0. Tests: supported 19/20 fixtures, old/future/malformed responses, visible failure.
+3. **WP2 — Durable turn identity (XCSH).** Persist a stable turn ID before work; retain it across reconnect/resume; allocate a new turn for a new prompt and distinct lineage for fork; define generations. Dependency: WP0. Tests: persistence, resume, fork, pre-event crash, collision.
+4. **WP3 — Durable semantic-turn contract (Herdr).** Add a supported report/query/wait API and journal for native agent turns. Persist identity, revision, state, bounded result/reason, digest, timestamps, and server-resolved provenance. Enforce idempotency, conflicts, monotonicity, terminal immutability, redaction, retention, replay, and restart loss. Dependencies: WP1/WP2 contract. Gate: Herdr tests and published schema/capability.
+5. **WP4 — Complete producer (XCSH).** Wire native lifecycle settlement—not rendering, idle, or shutdown—to WP3. Emit every semantic state with persisted identity. Keep short metadata as presentation only. Surface permanent delivery failure and use bounded ordered retry for transient failure. Dependencies: WP1–WP3. Gate: lifecycle/contract tests including forbidden false-success paths.
+6. **WP5 — Continuation/reconciliation (XCSH and Herdr).** Prove resume by path/ID, fork lineage, continuation after pane/process loss, output-drain ordering, and terminal reconciliation. Bind turns to admitted execution without making exit semantic. Dependencies: WP2–WP4. Gate: cross-process tests and installed provenance for the resume allow-list.
+7. **WP6 — Native XCSH worker and aggregate gates (Control Manager).** Add `xcsh` work kind through native Herdr execution; consume semantic revisions; persist accepted revision/digest; preserve all states; route cancel; continue the same session. Reuse durable journal/outbox/inbox and response correlation. Add required child/checklist gates so missing or deferred requirements keep parents incomplete. Do not require a wrapper/control-report workaround. Dependencies: WP3–WP5. Gate: mapping, replay, supersession, conflict, acknowledgment, and aggregation tests.
+8. **WP7 — Reproducible staged integration (all owners).** Pin source SHAs, produce versioned artifacts/checksums/schemas, then test in an isolated non-default Herdr environment and disposable Manager database. Dependencies: WP1–WP6. Gate: full matrix below with scrubbed retained evidence.
+9. **WP8 — Controlled activation/live acceptance (operations).** In an authorized maintenance window, verify no active work, install versioned artifacts, verify SHA/version/protocol/capabilities, restart only intended services, and run bounded live UAT. Roll back recorded binaries/config/data snapshot on health, replay, or mapping failure. Dependency: WP7. Gate: deployed identity plus live acknowledgment. No activation occurred here.
+
+## What end-to-end tests are required?
+
+Every scenario traverses **Control Manager request → Herdr tracked execution → XCSH semantic events → Herdr durable turn journal → Manager journal/outbox/direct acknowledgment → correlated Manager response**, asserting semantic and process state separately.
+
+| Scenario | Required assertion |
+| --- | --- |
+| Simple success | Stable identity reaches `completed`; bounded result/digest survive pane cleanup and are acknowledged once. Exit remains separate. |
+| Failure | Native failure reaches `failed`; output or exit zero cannot convert it to success. |
+| Input/approval wait | Wait stays nonterminal through idle, resumes on the same turn, then completes/fails; parent remains incomplete while waiting. |
+| Cancellation | Request, signal, and terminal semantic cancellation are distinct; no completion appears. |
+| Continuation | Same session, new turn/generation; prior result remains queryable and is not redelivered. |
+| Reconnect | Disconnect before acknowledgment causes replay; exact duplicate is idempotent and correlated response arrives once. |
+| Pane cleanup | Cleanup preserves execution, semantic result, Manager journal, and pending acknowledgment. |
+| Component restart | Restart each component at defined cut points; terminal data replays and unrecoverable active work becomes interrupted/lost. Record retention/tombstone limits. |
+| Duplicate/conflict/order | Exact duplicate succeeds idempotently; changed digest at same revision conflicts; stale events cannot regress state; newer generation supersedes without erasing audit. |
+| Resume/fork | Resume path/ID retains session identity; fork has distinct lineage and cannot collide. |
+| Protocol mismatch | Supported capabilities work; unsupported/missing capability fails visibly before tracking is claimed. |
+| Aggregate completion | Only all-required evidence permits acceptance; failed, waiting, missing, or deferred required items keep it incomplete. Optional items do not block/reopen core. |
+
+Unit tests use deterministic clocks, persistence reopen, injected disconnects, and schema fixtures. Integration uses real local binaries with temporary state. Staged UAT uses an isolated Herdr environment before default. Live evidence records artifact hashes, capabilities, execution/session/turn IDs, revisions/digests, acknowledgments, and aggregate status without secrets/full transcripts.
+
+## How is completion gated?
+
+- **Plan deliverable done:** this reviewable plan. This is the only completed stage now.
+- **Implementation ready:** all required owner changes merged at recorded SHAs; no required item open/deferred.
+- **Tested:** unit, integration, durability, and negative tests pass against those SHAs.
+- **Installed:** deployed paths, hashes, schema, and capabilities match tested artifacts.
+- **Live verified:** full live matrix passes through durable acknowledgment, with rollback available.
+- **Overall feature accepted:** every required preceding gate has evidence. Any missing/deferred required item forces `INCOMPLETE`; a worker turn, plan, process, PR, or optimistic checklist cannot override it.
+
+Manager computes parent status from required child/gate records, rejects `accepted` when evidence is absent, and reports exact blockers in UI/API. A completed planning worker turn means only that this plan was delivered.
+
+External phone rendering/audio-playback receipts are a separate optional enhancement explicitly deferred by the requester. They do not block or reopen accepted core Manager delivery, and cannot substitute for XCSH end-to-end evidence.
+
+## What decisions and risks need review?
+
+- **Recommended:** first-class durable Herdr semantic-turn journal; metadata cannot carry results, ordering, or restart guarantees.
+- **Recommended:** explicit capabilities and supported protocol set/range; accepting every newer version risks schema misinterpretation.
+- **Recommended:** server-bind task identity through execution/pane provenance and correlate Manager generation; do not trust free-form producer identity.
+- **Recommended:** immutable terminal events and new generations for continuation/retry.
+- **Risk:** current Herdr source is a dirty development worktree and installed binary lacks source provenance. Do not promote inspection to deployed evidence.
+- **Risk:** nonfatal reporter errors preserve XCSH use but hide tracking loss. Show degraded tracking and fail Manager acceptance closed.
+- **Risk:** retention/restart timing creates evidence gaps. Persist truncation/completeness/loss markers and block acceptance when evidence is missing.
+- **Risk:** cancellation races completion. Serialize final revision acceptance; audit later conflicts without changing the accepted result.

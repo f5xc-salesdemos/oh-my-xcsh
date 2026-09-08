@@ -3,6 +3,30 @@
   "generatedFrom": "issue-3690-legacy-concept-audit",
   "pages": [
     {
+      "path": "docs/en/architecture-contribution/herdr-gap-closing-plan.mdx",
+      "classification": "explanation",
+      "audience": "XCSH, Herdr, and Control Manager developers",
+      "readerNeed": "Implement and prove native semantic-turn signaling without conflating process lifecycle with feature completion.",
+      "purpose": "Define evidence-backed gaps, ownership, invariants, work packages, end-to-end tests, activation gates, and completion semantics for native Herdr signaling.",
+      "sourceAuthority": [
+        "packages/coding-agent/src/herdr/client.ts",
+        "packages/coding-agent/src/extensibility/extensions/bundled/herdr-reporter.ts",
+        "packages/coding-agent/test/herdr-reporter.test.ts",
+        "docs/en/integrations-deployment/herdr.mdx"
+      ],
+      "evidence": ["source-authority", "candidate-cli"],
+      "headings": [
+        { "text": "Current delivery checklist", "readerQuestion": "Which delivery stages are proven and which remain open?", "purpose": "Prevent partial implementation or deferred required work from appearing complete.", "evidence": ["source-authority", "candidate-cli"], "legacyConceptIds": [] },
+        { "text": "What is proven now?", "readerQuestion": "Which parity claims have evidence today?", "purpose": "Separate source, unit, installed-interface, and missing evidence.", "evidence": ["source-authority", "candidate-cli"], "legacyConceptIds": [] },
+        { "text": "Which invariants define parity?", "readerQuestion": "Which identities and lifecycle boundaries must implementations preserve?", "purpose": "Define the three-plane contract and durable ordering rules.", "evidence": ["source-authority"], "legacyConceptIds": [] },
+        { "text": "What do statuses mean?", "readerQuestion": "How must native states appear in UI and Manager behavior?", "purpose": "Prevent false completion and preserve waiting, failure, cancellation, and loss distinctions.", "evidence": ["source-authority"], "legacyConceptIds": [] },
+        { "text": "Which ordered work packages close the gaps?", "readerQuestion": "Who must implement each gap and in what dependency order?", "purpose": "Provide actionable owner-specific work packages and gates.", "evidence": ["source-authority"], "legacyConceptIds": [] },
+        { "text": "What end-to-end tests are required?", "readerQuestion": "Which scenarios prove the complete durable path?", "purpose": "Specify unit, integration, staged, and live acceptance coverage.", "evidence": ["source-authority"], "legacyConceptIds": [] },
+        { "text": "How is completion gated?", "readerQuestion": "When may the feature be shown as accepted?", "purpose": "Keep plan, implementation, testing, installation, live verification, and acceptance distinct.", "evidence": ["source-authority"], "legacyConceptIds": [] },
+        { "text": "What decisions and risks need review?", "readerQuestion": "Which contract decisions and operational risks require explicit review?", "purpose": "Record recommended decisions and fail-closed risks.", "evidence": ["source-authority"], "legacyConceptIds": [] }
+      ]
+    },
+    {
       "path": "docs/en/architecture-contribution/agent-session-runtime.mdx",
       "classification": "concept",
       "audience": "xcsh contributors",
@@ -2498,6 +2522,16 @@
             "source-authority",
             "candidate-cli",
             "legacy-enrichment"
+          ],
+          "legacyConceptIds": []
+        },
+        {
+          "text": "What lifecycle state does xcsh publish?",
+          "readerQuestion": "Which native lifecycle signals does xcsh publish to Herdr?",
+          "purpose": "Document the verified lifecycle contract, its safety boundaries, and unpublished producer and consumer issue drafts.",
+          "evidence": [
+            "source-authority",
+            "candidate-cli"
           ],
           "legacyConceptIds": []
         }

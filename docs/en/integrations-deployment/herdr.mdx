@@ -19,3 +19,26 @@ A workspace is tied to the conversation identity supplied at startup. Terminal-m
 ## How do I recover from socket failure?
 
 Connection and framing failures surface as integration diagnostics. The client must not open an inbound listener as a fallback. Close conversation-owned resources through the supported lifecycle and preserve unrelated Herdr workspaces.
+
+## What lifecycle state does xcsh publish?
+
+XCSH publishes native turn phases rather than inferring completion from terminal idleness or process exit. With Herdr protocol 20 and the advertised `agent_turn_journal` capability, a tracked execution publishes a persisted session/turn identity and a bounded semantic result to Herdr's durable journal. The existing 80-character metadata preview remains display-only and is never completion evidence. Commentary, prompt content, tool data, and failed or cancelled partial output are excluded.
+
+Session shutdown releases pane authority. It does not convert an unfinished turn into a successful completion.
+
+The verified contract is:
+
+| Concern | XCSH signal | Herdr disposition |
+| --- | --- | --- |
+| Session start and identity | Persisted native session ID/path | Herdr resume reference plus stable semantic session identity. |
+| Turn start/progress | Persisted UUID and normalized `turn_phase` | `starting`/`working` journal events with producer revision and server revision. |
+| Waiting for input/approval | `awaiting_user` and closed prompt kind | `waiting_input` with fixed safe reason; private prompt content is excluded. |
+| Successful completion | Settlement-aware `idle` after `agent_end` | `completed` with at most 8,000 UTF-8 bytes and a matching SHA-256 digest. |
+| Failure/cancellation | `error` or `cancelled` | Distinct terminal state and bounded safe reason; no partial result. |
+| Resume/fork | Session events and persisted custom turn entries | Resume preserves identity; unfinished recovered work becomes `interrupted`; fork has separate session lineage. |
+| Reconnect/order | Serialized queue and persisted event revision | Exact duplicates are idempotent; stale/conflicting revisions fail; terminal state is immutable. |
+| Application exit | `session_shutdown` | Active turn becomes `interrupted`, then pane authority is released; never success. |
+
+XCSH implementation is tracked by [issue #3768](https://github.com/f5-sales-demo/xcsh/issues/3768). The complete cross-project work packages and acceptance gates are in [Herdr native signaling gap-closing plan](../architecture-contribution/herdr-gap-closing-plan).
+
+Herdr lifecycle reconciliation is tracked by issue #5 in the F5 Herdr fork. Current source already recognizes the exact `("herdr:xcsh", "xcsh")` resume pair; deployed build provenance and live resume/fork acceptance remain required before feature acceptance.
