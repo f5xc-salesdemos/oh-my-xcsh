@@ -192,23 +192,21 @@ describe("getAvailableLiteLLMLoginModelChoices", () => {
 });
 
 describe("getLiteLLMLoginModelRoles", () => {
-	it("maps the OAuth GPT-5.6 tier defaults onto the LiteLLM provider", () => {
-		expect(getLiteLLMLoginModelRoles(GPT_CHOICE, { vision: "google/vision" })).toEqual({
+	it("maps only the latest GPT-5.6 tier defaults onto the LiteLLM provider", () => {
+		expect(getLiteLLMLoginModelRoles(GPT_CHOICE)).toEqual({
 			smol: "litellm/gpt-5.6-luna:low",
 			default: "litellm/gpt-5.6-terra:medium",
 			slow: "litellm/gpt-5.6-sol:high",
 			plan: "litellm/gpt-5.6-sol:high",
-			vision: "google/vision",
 		});
 	});
 
-	it("maps the OAuth Claude tier defaults onto the Anthropic proxy provider", () => {
-		expect(getLiteLLMLoginModelRoles(OPUS_CHOICE, { reviewer: "custom/reviewer" })).toEqual({
+	it("maps only the latest Claude tier defaults onto the Anthropic proxy provider", () => {
+		expect(getLiteLLMLoginModelRoles(OPUS_CHOICE)).toEqual({
 			smol: "anthropic/claude-haiku-4-5:low",
 			default: "anthropic/claude-sonnet-5:medium",
 			slow: "anthropic/claude-opus-5:high",
 			plan: "anthropic/claude-opus-5:high",
-			reviewer: "custom/reviewer",
 		});
 	});
 });

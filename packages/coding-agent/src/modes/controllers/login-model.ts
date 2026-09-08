@@ -82,19 +82,15 @@ export function getAvailableLiteLLMLoginModelChoices(availableModelIds: readonly
  * entitlement checks. It shares only the reviewed OAuth role policy and maps
  * that policy onto the provider namespace used by the LiteLLM configuration.
  */
-export function getLiteLLMLoginModelRoles(
-	choice: LiteLLMLoginModelChoice,
-	currentRoles: Readonly<Record<string, string>>,
-): Record<string, string> {
+export function getLiteLLMLoginModelRoles(choice: LiteLLMLoginModelChoice): Record<string, string> {
 	const profileId: SubscriptionProfileId = choice.modelId === "claude-opus-5" ? "anthropic" : "openai-codex";
 	const profile = SUBSCRIPTION_ROUTING_PROFILES[profileId];
-	const roles = Object.fromEntries(
+	return Object.fromEntries(
 		Object.entries(profile.roles).map(([role, selector]) => {
 			const slash = selector.indexOf("/");
 			return [role, `${choice.provider}/${selector.slice(slash + 1)}`];
 		}),
 	);
-	return { ...currentRoles, ...roles };
 }
 
 export function getVllmLoginModelChoices(models: readonly VllmDiscoveredModel[]): LoginModelChoice[] {

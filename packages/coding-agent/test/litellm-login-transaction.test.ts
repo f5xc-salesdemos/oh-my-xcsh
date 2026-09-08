@@ -99,9 +99,59 @@ describe("commitLiteLLMLogin", () => {
 		});
 	});
 
+	it("removes legacy role models when applying the GPT-5.6 family", async () => {
+		const paths = createPaths();
+		const state = createSession();
+		state.settings.set("modelRoles", {
+			default: "openai/gpt-4.1-mini",
+			smol: "openai/gpt-5-nano",
+			reviewer: "openai/gpt-4.1-mini",
+		});
+
+		await commitLiteLLMLogin({
+			...paths,
+			credentials: { baseUrl: "https://litellm.example.test", apiKey: "sk-test" },
+			probe: { reachable: true, models: ["gpt-5.6-sol"], apiBasePath: "/v1" },
+			choice: GPT,
+			session: state.session,
+		});
+
+		expect(state.getModelRoles()).toEqual({
+			smol: "litellm/gpt-5.6-luna:low",
+			default: "litellm/gpt-5.6-terra:medium",
+			slow: "litellm/gpt-5.6-sol:high",
+			plan: "litellm/gpt-5.6-sol:high",
+		});
+	});
+
 	it("applies Claude family defaults without relying on the OAuth entitlement manifest", async () => {
 		const paths = createPaths();
 		const state = createSession({ selectedModel: { id: "claude-opus-5", provider: "anthropic" } as Model });
+
+		await commitLiteLLMLogin({
+			...paths,
+			credentials: { baseUrl: "https://litellm.example.test", apiKey: "sk-test" },
+			probe: { reachable: true, models: ["claude-opus-5"], apiBasePath: "/v1" },
+			choice: OPUS,
+			session: state.session,
+		});
+
+		expect(state.getModelRoles()).toEqual({
+			smol: "anthropic/claude-haiku-4-5:low",
+			default: "anthropic/claude-sonnet-5:medium",
+			slow: "anthropic/claude-opus-5:high",
+			plan: "anthropic/claude-opus-5:high",
+		});
+	});
+
+	it("removes non-Claude role models when applying the latest Claude family", async () => {
+		const paths = createPaths();
+		const state = createSession({ selectedModel: { id: "claude-opus-5", provider: "anthropic" } as Model });
+		state.settings.set("modelRoles", {
+			default: "openai/gpt-4.1-mini",
+			smol: "openai/gpt-5-nano",
+			reviewer: "openai/gpt-4.1-mini",
+		});
 
 		await commitLiteLLMLogin({
 			...paths,

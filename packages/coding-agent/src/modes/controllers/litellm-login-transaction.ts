@@ -94,7 +94,7 @@ export async function commitLiteLLMLogin(options: CommitLiteLLMLoginOptions): Pr
 		await session.modelRegistry.refresh("online");
 		const applied = await applyModelAfterLogin(session, choice);
 		if (!applied) throw new Error(`Model unavailable after refresh: ${choice.provider}/${choice.modelId}`);
-		session.settings.set("modelRoles", getLiteLLMLoginModelRoles(choice, previousModelRoles));
+		session.settings.set("modelRoles", getLiteLLMLoginModelRoles(choice));
 	} catch (error) {
 		const rollbackErrors: unknown[] = [];
 		for (const [filePath, snapshot] of [
