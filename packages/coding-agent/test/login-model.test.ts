@@ -8,6 +8,7 @@ import {
 	GOOGLE_ANTIGRAVITY_LOGIN_MODEL_CHOICE,
 	GOOGLE_VERTEX_LOGIN_MODEL_CHOICE,
 	getAvailableLiteLLMLoginModelChoices,
+	getLiteLLMLoginModelRoles,
 	getVllmLoginModelChoices,
 	LITELLM_LOGIN_MODEL_CHOICES,
 	OPENAI_CODEX_LOGIN_MODEL_CHOICE,
@@ -187,6 +188,28 @@ describe("getAvailableLiteLLMLoginModelChoices", () => {
 
 	it("returns no choices when neither curated model is advertised", () => {
 		expect(getAvailableLiteLLMLoginModelChoices(["gpt-5.6-terra"])).toEqual([]);
+	});
+});
+
+describe("getLiteLLMLoginModelRoles", () => {
+	it("maps the OAuth GPT-5.6 tier defaults onto the LiteLLM provider", () => {
+		expect(getLiteLLMLoginModelRoles(GPT_CHOICE, { vision: "google/vision" })).toEqual({
+			smol: "litellm/gpt-5.6-luna:low",
+			default: "litellm/gpt-5.6-terra:medium",
+			slow: "litellm/gpt-5.6-sol:high",
+			plan: "litellm/gpt-5.6-sol:high",
+			vision: "google/vision",
+		});
+	});
+
+	it("maps the OAuth Claude tier defaults onto the Anthropic proxy provider", () => {
+		expect(getLiteLLMLoginModelRoles(OPUS_CHOICE, { reviewer: "custom/reviewer" })).toEqual({
+			smol: "anthropic/claude-haiku-4-5:low",
+			default: "anthropic/claude-sonnet-5:medium",
+			slow: "anthropic/claude-opus-5:high",
+			plan: "anthropic/claude-opus-5:high",
+			reviewer: "custom/reviewer",
+		});
 	});
 });
 

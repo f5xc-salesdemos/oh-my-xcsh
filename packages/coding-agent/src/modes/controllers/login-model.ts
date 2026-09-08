@@ -2,7 +2,11 @@ import { ThinkingLevel } from "@f5-sales-demo/pi-agent-core";
 import { canonicalizeOAuthProviderId, type Model, ReasoningEffort } from "@f5-sales-demo/pi-ai";
 import type { Settings } from "../../config/settings";
 import type { VllmDiscoveredModel } from "../../config/vllm-config";
-import { applySubscriptionProfileRoles, type SubscriptionProfileId } from "../../routing/subscription-profiles";
+import {
+	applySubscriptionProfileRoles,
+	SUBSCRIPTION_ROUTING_PROFILES,
+	type SubscriptionProfileId,
+} from "../../routing/subscription-profiles";
 
 export interface LoginModelChoice {
 	label: string;
@@ -69,6 +73,28 @@ export const ANTHROPIC_LOGIN_MODEL_CHOICE: LoginModelChoice = {
 export function getAvailableLiteLLMLoginModelChoices(availableModelIds: readonly string[]): LiteLLMLoginModelChoice[] {
 	const available = new Set(availableModelIds);
 	return LITELLM_LOGIN_MODEL_CHOICES.filter(choice => available.has(choice.modelId));
+}
+
+/**
+ * Build the curated role defaults for a model family selected through LiteLLM.
+ *
+ * LiteLLM has its own model catalog, so this deliberately does not run OAuth
+ * entitlement checks. It shares only the reviewed OAuth role policy and maps
+ * that policy onto the provider namespace used by the LiteLLM configuration.
+ */
+export function getLiteLLMLoginModelRoles(
+	choice: LiteLLMLoginModelChoice,
+	currentRoles: Readonly<Record<string, string>>,
+): Record<string, string> {
+	const profileId: SubscriptionProfileId = choice.modelId === "claude-opus-5" ? "anthropic" : "openai-codex";
+	const profile = SUBSCRIPTION_ROUTING_PROFILES[profileId];
+	const roles = Object.fromEntries(
+		Object.entries(profile.roles).map(([role, selector]) => {
+			const slash = selector.indexOf("/");
+			return [role, `${choice.provider}/${selector.slice(slash + 1)}`];
+		}),
+	);
+	return { ...currentRoles, ...roles };
 }
 
 export function getVllmLoginModelChoices(models: readonly VllmDiscoveredModel[]): LoginModelChoice[] {

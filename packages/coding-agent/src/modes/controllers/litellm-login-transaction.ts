@@ -11,7 +11,7 @@ import {
 	writeLiteLLMModelsYml,
 } from "../../config/auto-config";
 import type { LiteLLMLoginCredentials } from "./litellm-login-flow";
-import { applyModelAfterLogin, type LiteLLMLoginModelChoice } from "./login-model";
+import { applyModelAfterLogin, getLiteLLMLoginModelRoles, type LiteLLMLoginModelChoice } from "./login-model";
 
 interface TransactionSession {
 	model?: Model;
@@ -94,6 +94,7 @@ export async function commitLiteLLMLogin(options: CommitLiteLLMLoginOptions): Pr
 		await session.modelRegistry.refresh("online");
 		const applied = await applyModelAfterLogin(session, choice);
 		if (!applied) throw new Error(`Model unavailable after refresh: ${choice.provider}/${choice.modelId}`);
+		session.settings.set("modelRoles", getLiteLLMLoginModelRoles(choice, previousModelRoles));
 	} catch (error) {
 		const rollbackErrors: unknown[] = [];
 		for (const [filePath, snapshot] of [

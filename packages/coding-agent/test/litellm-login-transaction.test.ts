@@ -22,9 +22,9 @@ function createPaths() {
 	};
 }
 
-function createSession(options?: { failModelApply?: boolean }) {
+function createSession(options?: { failModelApply?: boolean; selectedModel?: Model }) {
 	const previousModel = { id: "previous", provider: "previous-provider" } as Model;
-	const selectedModel = { id: "gpt-5.6-sol", provider: "litellm" } as Model;
+	const selectedModel = options?.selectedModel ?? ({ id: "gpt-5.6-sol", provider: "litellm" } as Model);
 	const refresh = vi.fn(async () => {});
 	let modelRoles: Record<string, string> = { default: "previous-provider/previous:medium", smol: "other/smol" };
 	const settings = {
@@ -61,6 +61,7 @@ function createSession(options?: { failModelApply?: boolean }) {
 }
 
 const GPT = LITELLM_LOGIN_MODEL_CHOICES.find(choice => choice.modelId === "gpt-5.6-sol")!;
+const OPUS = LITELLM_LOGIN_MODEL_CHOICES.find(choice => choice.modelId === "claude-opus-5")!;
 
 describe("commitLiteLLMLogin", () => {
 	it("writes the URL-bearing profiles, refreshes, and applies the selected model", async () => {
@@ -84,6 +85,32 @@ describe("commitLiteLLMLogin", () => {
 		expect(state.setModel).toHaveBeenCalledWith(state.selectedModel, "default", {
 			selector: "litellm/gpt-5.6-sol",
 			thinkingLevel: ThinkingLevel.High,
+		});
+		expect(state.getModelRoles()).toEqual({
+			smol: "litellm/gpt-5.6-luna:low",
+			default: "litellm/gpt-5.6-terra:medium",
+			slow: "litellm/gpt-5.6-sol:high",
+			plan: "litellm/gpt-5.6-sol:high",
+		});
+	});
+
+	it("applies Claude family defaults without relying on the OAuth entitlement manifest", async () => {
+		const paths = createPaths();
+		const state = createSession({ selectedModel: { id: "claude-opus-5", provider: "anthropic" } as Model });
+
+		await commitLiteLLMLogin({
+			...paths,
+			credentials: { baseUrl: "https://litellm.example.test", apiKey: "sk-test" },
+			probe: { reachable: true, models: ["claude-opus-5"], apiBasePath: "/v1" },
+			choice: OPUS,
+			session: state.session,
+		});
+
+		expect(state.getModelRoles()).toEqual({
+			smol: "anthropic/claude-haiku-4-5:low",
+			default: "anthropic/claude-sonnet-5:medium",
+			slow: "anthropic/claude-opus-5:high",
+			plan: "anthropic/claude-opus-5:high",
 		});
 	});
 
