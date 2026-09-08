@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { connect } from "node:net";
 
-export const HERDR_PROTOCOL_VERSION = 19;
+export const HERDR_PROTOCOL_MIN_VERSION = 19;
+export const HERDR_PROTOCOL_MAX_VERSION = 20;
 const DEFAULT_TIMEOUT_MS = 5_000;
 const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 
@@ -19,9 +20,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/** Typed, one-request-per-connection client for Herdr's protocol-19 JSONL socket. */
+/** Typed, one-request-per-connection client for supported Herdr JSONL protocols. */
 export class HerdrClient {
 	private protocolChecked = false;
+	private negotiatedProtocol: number | undefined;
+	private capabilities: Readonly<Record<string, unknown>> = {};
 
 	constructor(
 		readonly socketPath: string,
@@ -32,14 +35,34 @@ export class HerdrClient {
 
 	async ensureProtocol(): Promise<void> {
 		if (this.protocolChecked) return;
-		const pong = await this.requestRaw<{ type: string; protocol: number; version: string }>("ping", {});
-		if (pong.type !== "pong" || pong.protocol !== HERDR_PROTOCOL_VERSION) {
+		const pong = await this.requestRaw<{
+			type: string;
+			protocol: number;
+			version: string;
+			capabilities?: Record<string, unknown>;
+		}>("ping", {});
+		if (
+			pong.type !== "pong" ||
+			!Number.isInteger(pong.protocol) ||
+			pong.protocol < HERDR_PROTOCOL_MIN_VERSION ||
+			pong.protocol > HERDR_PROTOCOL_MAX_VERSION
+		) {
 			throw new HerdrProtocolError(
-				`Herdr protocol mismatch: expected ${HERDR_PROTOCOL_VERSION}, received ${String(pong.protocol)}`,
+				`Herdr protocol mismatch: supported ${HERDR_PROTOCOL_MIN_VERSION}-${HERDR_PROTOCOL_MAX_VERSION}, received ${String(pong.protocol)}`,
 				"protocol_mismatch",
 			);
 		}
+		this.negotiatedProtocol = pong.protocol;
+		this.capabilities = isRecord(pong.capabilities) ? Object.freeze({ ...pong.capabilities }) : {};
 		this.protocolChecked = true;
+	}
+
+	get protocolVersion(): number | undefined {
+		return this.negotiatedProtocol;
+	}
+
+	hasCapability(name: string): boolean {
+		return this.capabilities[name] === true;
 	}
 
 	async request<T extends Record<string, unknown>>(method: string, params: Record<string, unknown>): Promise<T> {
