@@ -25,6 +25,36 @@ export enum Reason {
 const callbackList: ((reason: Reason) => Promise<void> | void)[] = [];
 // Tracks cleanup run state (to prevent recursion/reentry issues)
 let cleanupStage: "idle" | "running" | "complete" = "idle";
+const signalInterceptors = new Map<Reason, Set<() => boolean | Promise<boolean>>>();
+
+/**
+ * Temporarily intercept one postmortem signal before global cleanup begins.
+ *
+ * This is intentionally scoped and opt-in. Returning true declares that the
+ * caller handled the signal; returning false leaves the normal cleanup/exit
+ * path unchanged. The returned function removes the interceptor.
+ */
+export function interceptSignal(reason: Reason, handler: () => boolean | Promise<boolean>): () => void {
+	const handlers = signalInterceptors.get(reason) ?? new Set();
+	handlers.add(handler);
+	signalInterceptors.set(reason, handlers);
+	return () => {
+		handlers.delete(handler);
+		if (handlers.size === 0) signalInterceptors.delete(reason);
+	};
+}
+
+async function signalWasIntercepted(reason: Reason): Promise<boolean> {
+	const handlers = [...(signalInterceptors.get(reason) ?? [])].reverse();
+	for (const handler of handlers) {
+		try {
+			if (await handler()) return true;
+		} catch (error) {
+			logger.error("Signal interceptor failed", { reason, error: String(error) });
+		}
+	}
+	return false;
+}
 
 /**
  * Internal: runs all registered cleanup callbacks for the given reason.
@@ -79,6 +109,7 @@ function formatFatalError(label: string, err: Error): string {
 if (isMainThread) {
 	process
 		.on("SIGINT", async () => {
+			if (await signalWasIntercepted(Reason.SIGINT)) return;
 			await runCleanup(Reason.SIGINT);
 			process.exit(130); // 128 + SIGINT (2)
 		})

@@ -545,6 +545,13 @@ export default function herdrReporter(pi: ExtensionAPI): void {
 		startHeartbeat();
 		await report("idle");
 		await reportSession(ctx);
+		// An argv prompt can enter before_agent_start while the asynchronous
+		// session_start extension callback is still draining.  In that case the
+		// reporter has already appended this process's revision-0/starting entries;
+		// treating those in-memory entries as restart residue would immediately
+		// interrupt the live turn.  Startup replay is only for a process that has
+		// not begun a semantic turn of its own.
+		if (activeSemanticTurn) return;
 		const persisted = persistedTurns(ctx);
 		const byRevision = new Map<string, PersistedTurn>();
 		for (const event of persisted) {

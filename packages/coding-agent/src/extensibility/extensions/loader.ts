@@ -21,6 +21,7 @@ import { getAllPluginExtensionPaths } from "../plugins/loader";
 import { resolvePath } from "../utils";
 import herdrReporter from "./bundled/herdr-reporter";
 import herdrTerminal from "./bundled/herdr-terminal";
+import nativeLifecycleControl from "./bundled/native-lifecycle-control";
 import sandboxGuard from "./bundled/sandbox-guard";
 import type {
 	Extension,
@@ -501,6 +502,10 @@ async function discoverExtensionsInDir(dir: string): Promise<string[]> {
  */
 /** Extensions bundled with xcsh and loaded by default (before user extensions). */
 const BUNDLED_EXTENSIONS: ReadonlyArray<{ name: string; factory: ExtensionFactory }> = [
+	// First here means last after loadBundledExtensions' prepend.  The reporter's
+	// before_agent_start handler must establish its semantic turn before this
+	// acceptance-only extension can pause inside the native UI prompt.
+	{ name: "native-lifecycle-control", factory: nativeLifecycleControl },
 	{ name: "herdr-reporter", factory: herdrReporter },
 	{ name: "herdr-terminal", factory: herdrTerminal },
 	{ name: "sandbox-guard", factory: sandboxGuard },

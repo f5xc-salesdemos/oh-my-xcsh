@@ -2580,6 +2580,16 @@
             "candidate-cli"
           ],
           "legacyConceptIds": []
+        },
+        {
+          "text": "Producer-native acceptance driver",
+          "readerQuestion": "How do I run the executable producer-native lifecycle acceptance scenarios?",
+          "purpose": "Document the versioned source-native acceptance command, its real PTY and provider controls, and the boundary between source evidence and downstream installed-artifact acceptance.",
+          "evidence": [
+            "source-authority",
+            "candidate-cli"
+          ],
+          "legacyConceptIds": []
         }
       ]
     },
