@@ -73,6 +73,7 @@ const commands: CommandEntry[] = [
 		syntax: { args: sandboxArgs, flags: sandboxFlags },
 	},
 	{ name: "jupyter", load: () => import("./commands/jupyter").then(m => m.default) },
+	{ name: "lifecycle", load: () => import("./commands/lifecycle").then(m => m.default) },
 	{ name: "manager", load: () => import("./commands/manager").then(m => m.default) },
 	{ name: "office", load: () => import("./commands/office").then(m => m.default) },
 	{ name: "plugin", load: () => import("./commands/plugin").then(m => m.default) },
