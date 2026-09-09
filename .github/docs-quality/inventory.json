@@ -2560,6 +2560,16 @@
             "candidate-cli"
           ],
           "legacyConceptIds": []
+        },
+        {
+          "text": "External execution driver contract",
+          "readerQuestion": "What must an external execution backend provide for XCSH semantic lifecycle reporting?",
+          "purpose": "Define the backend-owned execution identity, generation, cancellation, and native-phase boundaries for semantic lifecycle reporting.",
+          "evidence": [
+            "source-authority",
+            "candidate-cli"
+          ],
+          "legacyConceptIds": []
         }
       ]
     },
