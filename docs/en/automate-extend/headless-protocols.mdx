@@ -16,6 +16,22 @@ xcsh --mode json --no-session --no-tools -p "Return one sentence"
 
 Capture stdout as protocol data and stderr as diagnostics. Pin the xcsh version in automation and test framing against the exact release.
 
+## How do I retain and resume a JSON-mode session?
+
+Use a dedicated session directory when the JSON stream must survive process loss:
+
+```bash
+xcsh --mode json --session-dir /var/lib/my-controller/xcsh-sessions -p "Return one sentence"
+```
+
+The first stdout line is a `SessionHeader`. Its `id` is a 16-character lowercase hexadecimal XCSH session ID. With `--session-dir`, xcsh atomically writes and fsyncs the matching `<timestamp>_<id>.jsonl` file before emitting that header; the header's persisted `cwd`, `id`, and timestamp are the resumable record. Keep the path discovered in the session directory (or resolve the ID there), then continue through the documented resume argument:
+
+```bash
+xcsh --resume /var/lib/my-controller/xcsh-sessions/<timestamp>_<id>.jsonl "Continue the task"
+```
+
+`--no-session` deliberately produces no resumable file or session header. The stream's wire-only `model`, `provider`, and `thinking` fields describe the launch; they are not additional persisted session-header fields.
+
 ## When do I use the software development kit (SDK) instead?
 
 Use the SDK when the host process needs in-memory session control, tool registration, or provider events. See [SDK automation](./sdk/).

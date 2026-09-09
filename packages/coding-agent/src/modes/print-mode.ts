@@ -74,6 +74,10 @@ export async function runPrintMode(session: AgentSession, options: PrintModeOpti
 
 	// Emit session header for JSON mode.
 	if (mode === "json") {
+		// A JSON header advertises a session identity to an external process. Make that
+		// identity resumable before it becomes observable, even when this invocation
+		// has no prompt and therefore would otherwise retain lazy persistence.
+		await session.sessionManager.ensureOnDisk();
 		const line = buildJsonSessionHeaderLine(session.sessionManager.getHeader(), session.model, session.thinkingLevel);
 		if (line) process.stdout.write(line);
 	}
