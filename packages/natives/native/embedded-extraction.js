@@ -35,7 +35,7 @@ function ensureEmbeddedAddon({ sourcePath, targetPath, fsImpl = fs }) {
 	const temporaryPath = `${targetPath}.tmp-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 	let temporaryExists = false;
 	try {
-		fsImpl.writeFileSync(temporaryPath, buffer, { flag: "wx", mode: 0o600 });
+		fsImpl.writeFileSync(temporaryPath, buffer, { flag: "wx" });
 		temporaryExists = true;
 		try {
 			fsImpl.renameSync(temporaryPath, targetPath);

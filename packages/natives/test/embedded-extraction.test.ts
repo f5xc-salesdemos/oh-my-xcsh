@@ -29,9 +29,11 @@ describe("embedded native extraction", () => {
 	it("replaces a truncated extracted addon before returning it", () => {
 		const { sourcePath, targetPath, bytes } = makeFixture();
 		fs.writeFileSync(targetPath, bytes.subarray(0, 8192));
+		const expectedMode = fs.statSync(targetPath).mode & 0o777;
 
 		expect(ensureEmbeddedAddon({ sourcePath, targetPath })).toBe(targetPath);
 		expect(Buffer.compare(fs.readFileSync(targetPath), bytes)).toBe(0);
+		expect(fs.statSync(targetPath).mode & 0o777).toBe(expectedMode);
 		expect(fs.readdirSync(path.dirname(targetPath)).filter(name => name.includes(".tmp-"))).toEqual([]);
 	});
 
