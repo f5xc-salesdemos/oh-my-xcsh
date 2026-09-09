@@ -101,6 +101,8 @@ function boundedSemanticResult(message: AssistantMessage | undefined): string {
 }
 
 interface PersistedTurn {
+	executionId: string;
+	paneId: string;
 	sessionId: string;
 	turnId: string;
 	generation: number;
@@ -126,6 +128,13 @@ function executionGeneration(): number | undefined {
 	return Number.isSafeInteger(generation) ? generation : undefined;
 }
 
+function executionBinding(paneId: string): { executionId: string; paneId: string; generation: number } | undefined {
+	const executionId = process.env.HERDR_EXECUTION_ID;
+	const generation = executionGeneration();
+	if (!executionId || generation === undefined) return undefined;
+	return { executionId, paneId, generation };
+}
+
 function persistedTurns(ctx: ExtensionContext): PersistedTurn[] {
 	try {
 		const entries = ctx.sessionManager?.getEntries?.() as unknown[] | undefined;
@@ -135,12 +144,22 @@ function persistedTurns(ctx: ExtensionContext): PersistedTurn[] {
 			if (record.type !== "custom" || record.customType !== TURN_ENTRY_TYPE) return [];
 			if (typeof record.data !== "object" || record.data === null) return [];
 			const turn = record.data as Record<string, unknown>;
-			if (typeof turn.sessionId !== "string" || typeof turn.turnId !== "string") return [];
+			if (
+				typeof turn.executionId !== "string" ||
+				typeof turn.paneId !== "string" ||
+				typeof turn.sessionId !== "string" ||
+				typeof turn.turnId !== "string" ||
+				!Number.isSafeInteger(turn.generation) ||
+				(turn.generation as number) < 0
+			)
+				return [];
 			return [
 				{
+					executionId: turn.executionId,
+					paneId: turn.paneId,
 					sessionId: turn.sessionId,
 					turnId: turn.turnId,
-					generation: typeof turn.generation === "number" ? turn.generation : 0,
+					generation: turn.generation as number,
 					eventRevision: typeof turn.eventRevision === "number" ? turn.eventRevision : undefined,
 					state: typeof turn.state === "string" ? (turn.state as PersistedTurn["state"]) : undefined,
 					result: typeof turn.result === "string" ? turn.result : undefined,
@@ -298,8 +317,7 @@ export default function herdrReporter(pi: ExtensionAPI): void {
 		state: "starting" | "working" | "waiting_input" | "completed" | "failed" | "cancelled" | "interrupted",
 		options: { result?: string; reason?: string } = {},
 	): Promise<void> => {
-		const executionId = process.env.HERDR_EXECUTION_ID;
-		if (!executionId || !activeSemanticTurn) return Promise.resolve();
+		if (!executionBinding(paneId) || !activeSemanticTurn) return Promise.resolve();
 		const revision = ++semanticRevision;
 		const event: PersistedTurn = {
 			...activeSemanticTurn,
@@ -316,13 +334,21 @@ export default function herdrReporter(pi: ExtensionAPI): void {
 
 	const deliverSemanticEvent = (event: PersistedTurn): Promise<void> => {
 		const socketPath = process.env.HERDR_SOCKET_PATH;
-		const executionId = process.env.HERDR_EXECUTION_ID;
-		if (!socketPath || !executionId || event.eventRevision === undefined || event.state === undefined) {
+		const binding = executionBinding(paneId);
+		if (
+			!socketPath ||
+			!binding ||
+			event.executionId !== binding.executionId ||
+			event.paneId !== binding.paneId ||
+			event.generation !== binding.generation ||
+			event.eventRevision === undefined ||
+			event.state === undefined
+		) {
 			return Promise.resolve();
 		}
 		const frame = {
-			execution_id: executionId,
-			pane_id: paneId,
+			execution_id: event.executionId,
+			pane_id: event.paneId,
 			producer: HERDR_AGENT_LABEL,
 			session_id: event.sessionId,
 			turn_id: event.turnId,
@@ -350,11 +376,11 @@ export default function herdrReporter(pi: ExtensionAPI): void {
 	};
 
 	const beginSemanticTurn = async (ctx: ExtensionContext): Promise<void> => {
-		const generation = executionGeneration();
-		if (!process.env.HERDR_EXECUTION_ID || generation === undefined) return;
+		const binding = executionBinding(paneId);
+		if (!binding) return;
 		const sessionId = ctx.sessionManager?.getSessionId?.();
 		if (typeof sessionId !== "string" || !sessionId) return;
-		activeSemanticTurn = { sessionId, turnId: randomUUID(), generation };
+		activeSemanticTurn = { ...binding, sessionId, turnId: randomUUID() };
 		semanticRevision = 0;
 		pendingSemanticResult = "";
 		pi.appendEntry(TURN_ENTRY_TYPE, { ...activeSemanticTurn, eventRevision: 0 });
@@ -526,10 +552,16 @@ export default function herdrReporter(pi: ExtensionAPI): void {
 				byRevision.set(`${event.sessionId}:${event.turnId}:${event.generation}:${event.eventRevision}`, event);
 			}
 		}
-		const generation = executionGeneration();
+		const binding = executionBinding(paneId);
+		if (!binding) return;
 		const events = [...byRevision.values()].filter(event => {
-			if (generation === undefined || event.generation === generation) return true;
-			onError(new Error("Persisted Herdr turn generation does not match this execution"));
+			if (
+				event.executionId === binding.executionId &&
+				event.paneId === binding.paneId &&
+				event.generation === binding.generation
+			)
+				return true;
+			onError(new Error("Persisted Herdr turn binding does not match this execution"));
 			return false;
 		});
 		for (const event of events.filter(event => !event.delivered)) await deliverSemanticEvent(event);

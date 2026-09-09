@@ -556,6 +556,8 @@ describe("herdr-reporter extension", () => {
 				{
 					customType: "herdr.semantic-turn",
 					data: {
+						executionId: "execution-1",
+						paneId: "w1:p1",
 						sessionId: "session-1",
 						turnId: "stable-turn",
 						generation: 1,
@@ -567,6 +569,8 @@ describe("herdr-reporter extension", () => {
 				{
 					customType: "herdr.semantic-turn",
 					data: {
+						executionId: "execution-1",
+						paneId: "w1:p1",
 						sessionId: "session-1",
 						turnId: "stable-turn",
 						generation: 1,
@@ -598,6 +602,51 @@ describe("herdr-reporter extension", () => {
 				state: "interrupted",
 			});
 			expect(recovered?.result).toBeUndefined();
+		} finally {
+			await herdr.close();
+		}
+	});
+
+	it("rejects persisted turns without an exact immutable execution binding", async () => {
+		const herdr = await startFakeHerdr({ protocol: 20, capabilities: { agent_turn_journal: true } });
+		try {
+			process.env.HERDR_PANE_ID = "w1:p1";
+			process.env.HERDR_SOCKET_PATH = herdr.socketPath;
+			process.env.HERDR_EXECUTION_ID = "execution-1";
+			process.env.HERDR_EXECUTION_GENERATION = "1";
+			const { pi, handlers, entries } = makeMockPi();
+			const event = (overrides: Record<string, unknown>) => ({
+				customType: "herdr.semantic-turn",
+				data: {
+					executionId: "execution-1",
+					paneId: "w1:p1",
+					sessionId: "session-1",
+					turnId: `stale-turn-${entries.length}`,
+					generation: 1,
+					eventRevision: 1,
+					state: "starting",
+					delivered: false,
+					...overrides,
+				},
+			});
+			entries.push(
+				event({ generation: 0 }),
+				event({ generation: "1" }),
+				event({ executionId: "old-execution" }),
+				event({ paneId: "w1:old" }),
+				event({ executionId: undefined }),
+			);
+			const ctx = {
+				isIdle: () => true,
+				sessionManager: {
+					getSessionId: () => "session-1",
+					getEntries: () => entries.map(({ customType, data }) => ({ type: "custom", customType, data })),
+				},
+			} as unknown as ExtensionContext;
+			herdrReporter(pi);
+			await handlers.get("session_start")?.({}, ctx);
+			await new Promise(resolve => setTimeout(resolve, 20));
+			expect(herdr.received.some(frame => frame.method === "agent.turn.report")).toBe(false);
 		} finally {
 			await herdr.close();
 		}
