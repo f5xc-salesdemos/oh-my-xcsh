@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { connect } from "node:net";
 
 export const HERDR_PROTOCOL_MIN_VERSION = 19;
-export const HERDR_PROTOCOL_MAX_VERSION = 20;
+export const HERDR_PROTOCOL_MAX_VERSION = 22;
 const DEFAULT_TIMEOUT_MS = 5_000;
 const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 

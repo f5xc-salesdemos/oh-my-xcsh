@@ -4,6 +4,7 @@ import type { AssistantMessage } from "@f5-sales-demo/pi-ai";
 import type { ExtensionAPI, ExtensionContext, UserPromptKind } from "@f5-sales-demo/xcsh";
 import { HerdrClient } from "../../../herdr/client";
 import { finalAnswerText } from "../../../session/final-answer";
+import { requestNativeLifecycleCancellation } from "./native-lifecycle-control";
 
 /**
  * herdr integration (bundled, default-on).
@@ -66,13 +67,19 @@ const SESSION_METHOD = "pane.report_agent_session";
 const HEARTBEAT_METHOD = "pane.report_agent_heartbeat";
 const RELEASE_METHOD = "pane.release_agent";
 const TURN_REPORT_METHOD = "agent.turn.report";
+const TURN_ACTION_GET_METHOD = "agent.turn.action.get";
+const TURN_ACTION_ACK_METHOD = "agent.turn.action.ack";
 const SOCKET_TIMEOUT_MS = 2000;
 const HEARTBEAT_INTERVAL_MS = 10_000;
 const PHASE_LABEL_TTL_MS = 60_000;
 const RESULT_MAX_CHARS = 80;
 const SEMANTIC_RESULT_MAX_BYTES = 8_000;
 const TURN_ENTRY_TYPE = "herdr.semantic-turn";
+const ACTION_ENTRY_TYPE = "herdr.semantic-action";
 const EXECUTION_GENERATION_ENV = "HERDR_EXECUTION_GENERATION";
+const NATIVE_CAPABILITY_ENV = "HERDR_NATIVE_CAPABILITY";
+const ACTION_POLL_INTERVAL_MS = 250;
+const ACTION_SAFE_POINT_TIMEOUT_MS = 30_000;
 const SETTLED_TURN_RECONCILE_DELAY_MS = 25;
 const PROMPT_BLOCKED_REASONS = {
 	select: "selection required",
@@ -114,6 +121,30 @@ interface PersistedTurn {
 	delivered?: boolean;
 }
 
+interface PersistedAction {
+	executionId: string;
+	paneId: string;
+	sessionId: string;
+	turnId: string;
+	generation: number;
+	backendExecutionId: string;
+	actionId: "cancel";
+	actionRevision: 1;
+	state: "requested" | "safe_point" | "timed_out";
+	requestedAtUnixMs: number;
+	timedOutAtUnixMs?: number;
+	ackDelivered?: boolean;
+}
+
+interface NativeActionRecord {
+	backend_execution_id: string;
+	action_id: string;
+	action_revision: number;
+	state: "requested" | "safe_point" | "timed_out";
+	requested_at_unix_ms: number;
+	timed_out_at_unix_ms?: number;
+}
+
 /**
  * A journal event is authenticated to one execution generation. The execution
  * backend, rather than the reporter, owns that value: guessing a generation
@@ -133,6 +164,11 @@ function executionBinding(paneId: string): { executionId: string; paneId: string
 	const generation = executionGeneration();
 	if (!executionId || generation === undefined) return undefined;
 	return { executionId, paneId, generation };
+}
+
+function nativeCapability(): string | undefined {
+	const value = process.env[NATIVE_CAPABILITY_ENV];
+	return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
 function persistedTurns(ctx: ExtensionContext): PersistedTurn[] {
@@ -172,6 +208,69 @@ function persistedTurns(ctx: ExtensionContext): PersistedTurn[] {
 	} catch {
 		return [];
 	}
+}
+
+function persistedActions(ctx: ExtensionContext): PersistedAction[] {
+	try {
+		const entries = ctx.sessionManager?.getEntries?.() as unknown[] | undefined;
+		return (entries ?? []).flatMap(entry => {
+			if (typeof entry !== "object" || entry === null) return [];
+			const record = entry as Record<string, unknown>;
+			if (record.type !== "custom" || record.customType !== ACTION_ENTRY_TYPE) return [];
+			if (typeof record.data !== "object" || record.data === null) return [];
+			const action = record.data as Record<string, unknown>;
+			if (
+				typeof action.executionId !== "string" ||
+				typeof action.paneId !== "string" ||
+				typeof action.sessionId !== "string" ||
+				typeof action.turnId !== "string" ||
+				!Number.isSafeInteger(action.generation) ||
+				typeof action.backendExecutionId !== "string" ||
+				action.actionId !== "cancel" ||
+				action.actionRevision !== 1 ||
+				!Number.isSafeInteger(action.requestedAtUnixMs) ||
+				!["requested", "safe_point", "timed_out"].includes(String(action.state))
+			)
+				return [];
+			return [
+				{
+					executionId: action.executionId,
+					paneId: action.paneId,
+					sessionId: action.sessionId,
+					turnId: action.turnId,
+					generation: action.generation as number,
+					backendExecutionId: action.backendExecutionId,
+					actionId: "cancel" as const,
+					actionRevision: 1 as const,
+					state: action.state as PersistedAction["state"],
+					requestedAtUnixMs: action.requestedAtUnixMs as number,
+					...(typeof action.timedOutAtUnixMs === "number" ? { timedOutAtUnixMs: action.timedOutAtUnixMs } : {}),
+					ackDelivered: action.ackDelivered === true,
+				},
+			];
+		});
+	} catch {
+		return [];
+	}
+}
+
+function decodeNativeActions(result: Record<string, unknown>): NativeActionRecord[] {
+	if (result.type !== "agent_turn_action_list" || !Array.isArray(result.actions)) {
+		throw new Error("Herdr returned an invalid native action list");
+	}
+	return result.actions.flatMap(value => {
+		if (typeof value !== "object" || value === null) return [];
+		const action = value as Record<string, unknown>;
+		if (
+			typeof action.backend_execution_id !== "string" ||
+			action.action_id !== "cancel" ||
+			action.action_revision !== 1 ||
+			!["requested", "safe_point", "timed_out"].includes(String(action.state)) ||
+			!Number.isSafeInteger(action.requested_at_unix_ms)
+		)
+			return [];
+		return [action as unknown as NativeActionRecord];
+	});
 }
 
 // Reused across calls for the life of the extension so `ensureProtocol()`'s
@@ -272,6 +371,14 @@ export default function herdrReporter(pi: ExtensionAPI): void {
 	// session anchor.
 	let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
 	let heartbeatActive = false;
+	let actionPollTimer: ReturnType<typeof setTimeout> | undefined;
+	let actionPolling = false;
+	let actionAfterRevision = 0;
+	let handledActionKey: string | undefined;
+	let nativeActionsEnabled = false;
+	let cancelAckGate: Promise<boolean> | undefined;
+	let resolveCancelAckGate: ((acknowledged: boolean) => void) | undefined;
+	let cancelAckDeadlineTimer: ReturnType<typeof setTimeout> | undefined;
 	// Serializes frames: herdr compares `seq` across all methods for this source,
 	// so frames must reach it in the order they were generated.
 	let queue: Promise<void> = Promise.resolve();
@@ -313,11 +420,11 @@ export default function herdrReporter(pi: ExtensionAPI): void {
 		);
 	};
 
-	const reportSemanticTurn = (
+	const reportSemanticTurn = async (
 		state: "starting" | "working" | "waiting_input" | "completed" | "failed" | "cancelled" | "interrupted",
 		options: { result?: string; reason?: string } = {},
-	): Promise<void> => {
-		if (!executionBinding(paneId) || !activeSemanticTurn) return Promise.resolve();
+	): Promise<boolean> => {
+		if (!executionBinding(paneId) || !activeSemanticTurn) return false;
 		const revision = ++semanticRevision;
 		const event: PersistedTurn = {
 			...activeSemanticTurn,
@@ -332,7 +439,7 @@ export default function herdrReporter(pi: ExtensionAPI): void {
 		return deliverSemanticEvent(event);
 	};
 
-	const deliverSemanticEvent = (event: PersistedTurn): Promise<void> => {
+	const deliverSemanticEvent = async (event: PersistedTurn): Promise<boolean> => {
 		const socketPath = process.env.HERDR_SOCKET_PATH;
 		const binding = executionBinding(paneId);
 		if (
@@ -344,9 +451,9 @@ export default function herdrReporter(pi: ExtensionAPI): void {
 			event.eventRevision === undefined ||
 			event.state === undefined
 		) {
-			return Promise.resolve();
+			return false;
 		}
-		const frame = {
+		const baseFrame = {
 			execution_id: event.executionId,
 			pane_id: event.paneId,
 			producer: HERDR_AGENT_LABEL,
@@ -358,7 +465,8 @@ export default function herdrReporter(pi: ExtensionAPI): void {
 			...(event.result === undefined ? {} : { result: event.result, result_digest: event.resultDigest }),
 			...(event.reason === undefined ? {} : { reason: event.reason }),
 		};
-		return enqueue(async () => {
+		let delivered = false;
+		await enqueue(async () => {
 			const client = getHerdrClient(socketPath);
 			try {
 				await client.ensureProtocol();
@@ -366,13 +474,193 @@ export default function herdrReporter(pi: ExtensionAPI): void {
 					onError(new Error("Herdr does not advertise agent_turn_journal; semantic tracking is degraded"));
 					return;
 				}
-				await client.request<Record<string, unknown>>(TURN_REPORT_METHOD, frame);
+				const capability = nativeCapability();
+				const frame =
+					client.protocolVersion === 22 && capability
+						? { ...baseFrame, native_capability: capability }
+						: baseFrame;
+				const response = await client.request<Record<string, unknown>>(TURN_REPORT_METHOD, frame);
+				if (client.protocolVersion === 22 && response.type !== "agent_turn") {
+					throw new Error("Herdr did not confirm the protocol-22 turn journal write");
+				}
 				pi.appendEntry(TURN_ENTRY_TYPE, { ...event, delivered: true });
+				delivered = true;
 				(latestContext as { ui?: ExtensionContext["ui"] } | undefined)?.ui?.setStatus("herdr-tracking", undefined);
 			} catch (err) {
 				onError(err);
 			}
 		});
+		return delivered;
+	};
+
+	const actionTarget = (action: PersistedAction): Record<string, unknown> | undefined => {
+		const capability = nativeCapability();
+		const binding = executionBinding(paneId);
+		if (
+			!capability ||
+			!binding ||
+			action.executionId !== binding.executionId ||
+			action.paneId !== binding.paneId ||
+			action.generation !== binding.generation
+		)
+			return undefined;
+		return {
+			execution_id: action.executionId,
+			pane_id: action.paneId,
+			producer: HERDR_AGENT_LABEL,
+			session_id: action.sessionId,
+			generation: action.generation,
+			native_capability: capability,
+			after_revision: 0,
+		};
+	};
+
+	const deliverActionAck = async (action: PersistedAction): Promise<boolean> => {
+		const socketPath = process.env.HERDR_SOCKET_PATH;
+		const target = actionTarget(action);
+		if (!socketPath || !target) return false;
+		try {
+			const client = getHerdrClient(socketPath);
+			await client.ensureProtocol();
+			if (client.protocolVersion !== 22) return false;
+			const response = await client.request<Record<string, unknown>>(TURN_ACTION_ACK_METHOD, {
+				...target,
+				action_id: action.actionId,
+				action_revision: action.actionRevision,
+				state: "safe_point",
+			});
+			if (response.type !== "agent_turn_action" || typeof response.action !== "object" || response.action === null) {
+				throw new Error("Herdr returned an invalid native action acknowledgement");
+			}
+			const acknowledged = response.action as Record<string, unknown>;
+			if (
+				acknowledged.action_id !== action.actionId ||
+				acknowledged.action_revision !== action.actionRevision ||
+				acknowledged.state !== "safe_point" ||
+				acknowledged.turn_id !== action.turnId
+			) {
+				throw new Error("Herdr acknowledged a different native action or turn");
+			}
+			pi.appendEntry(ACTION_ENTRY_TYPE, { ...action, state: "safe_point", ackDelivered: true });
+			return true;
+		} catch (err) {
+			onError(err);
+			return false;
+		}
+	};
+
+	const settleCancelGate = (acknowledged: boolean): void => {
+		if (cancelAckDeadlineTimer !== undefined) {
+			clearTimeout(cancelAckDeadlineTimer);
+			cancelAckDeadlineTimer = undefined;
+		}
+		resolveCancelAckGate?.(acknowledged);
+		resolveCancelAckGate = undefined;
+	};
+
+	const ensureCancelGate = (): void => {
+		if (cancelAckGate) return;
+		cancelAckGate = new Promise<boolean>(resolve => {
+			resolveCancelAckGate = resolve;
+		});
+		cancelAckDeadlineTimer = setTimeout(() => settleCancelGate(false), ACTION_SAFE_POINT_TIMEOUT_MS);
+		(cancelAckDeadlineTimer as { unref?: () => void }).unref?.();
+	};
+
+	const handleNativeAction = async (record: NativeActionRecord, ctx: ExtensionContext): Promise<void> => {
+		if (!activeSemanticTurn) return;
+		const action: PersistedAction = {
+			...activeSemanticTurn,
+			backendExecutionId: record.backend_execution_id,
+			actionId: "cancel",
+			actionRevision: 1,
+			state: record.state,
+			requestedAtUnixMs: record.requested_at_unix_ms,
+			...(record.timed_out_at_unix_ms === undefined ? {} : { timedOutAtUnixMs: record.timed_out_at_unix_ms }),
+		};
+		const actionKey = `${action.backendExecutionId}:${action.actionId}:${action.actionRevision}`;
+		if (record.state === "timed_out") {
+			pi.appendEntry(ACTION_ENTRY_TYPE, action);
+			actionAfterRevision = action.actionRevision;
+			settleCancelGate(false);
+			return;
+		}
+		ensureCancelGate();
+		if (handledActionKey !== actionKey) {
+			pi.appendEntry(ACTION_ENTRY_TYPE, { ...action, state: "requested", ackDelivered: false });
+			// This is the producer safe point: dismiss the actual managed UI prompt
+			// if one is open, then cooperatively abort the active AgentSession.
+			requestNativeLifecycleCancellation("Herdr native cancel action");
+			ctx.abort();
+			pi.appendEntry(ACTION_ENTRY_TYPE, { ...action, state: "safe_point", ackDelivered: false });
+			handledActionKey = actionKey;
+		}
+		const acknowledged = await deliverActionAck({ ...action, state: "safe_point", ackDelivered: false });
+		if (acknowledged) {
+			actionAfterRevision = action.actionRevision;
+			settleCancelGate(true);
+		}
+	};
+
+	const stopActionPolling = (): void => {
+		actionPolling = false;
+		if (actionPollTimer !== undefined) {
+			clearTimeout(actionPollTimer);
+			actionPollTimer = undefined;
+		}
+	};
+
+	const pollNativeActions = async (ctx: ExtensionContext): Promise<void> => {
+		const socketPath = process.env.HERDR_SOCKET_PATH;
+		const capability = nativeCapability();
+		const turn = activeSemanticTurn;
+		if (!actionPolling || !socketPath || !capability || !turn) return;
+		try {
+			const client = getHerdrClient(socketPath);
+			const result = await client.request<Record<string, unknown>>(TURN_ACTION_GET_METHOD, {
+				execution_id: turn.executionId,
+				pane_id: turn.paneId,
+				producer: HERDR_AGENT_LABEL,
+				session_id: turn.sessionId,
+				generation: turn.generation,
+				native_capability: capability,
+				after_revision: actionAfterRevision,
+			});
+			for (const action of decodeNativeActions(result)) await handleNativeAction(action, ctx);
+		} catch (err) {
+			onError(err);
+		} finally {
+			if (actionPolling && activeSemanticTurn) {
+				actionPollTimer = setTimeout(() => void pollNativeActions(ctx), ACTION_POLL_INTERVAL_MS);
+				(actionPollTimer as { unref?: () => void }).unref?.();
+			}
+		}
+	};
+
+	const startActionPolling = (ctx: ExtensionContext): void => {
+		if (actionPolling) return;
+		actionPolling = true;
+		void pollNativeActions(ctx);
+	};
+
+	const replayPersistedActionAcks = async (ctx: ExtensionContext): Promise<void> => {
+		const binding = executionBinding(paneId);
+		if (!binding || !nativeCapability()) return;
+		const latest = new Map<string, PersistedAction>();
+		for (const action of persistedActions(ctx)) {
+			if (
+				action.executionId !== binding.executionId ||
+				action.paneId !== binding.paneId ||
+				action.generation !== binding.generation
+			) {
+				onError(new Error("Persisted Herdr action binding does not match this execution"));
+				continue;
+			}
+			latest.set(`${action.backendExecutionId}:${action.actionId}:${action.actionRevision}`, action);
+		}
+		for (const action of latest.values()) {
+			if (action.state === "safe_point" && !action.ackDelivered) await deliverActionAck(action);
+		}
 	};
 
 	const beginSemanticTurn = async (ctx: ExtensionContext): Promise<void> => {
@@ -383,8 +671,16 @@ export default function herdrReporter(pi: ExtensionAPI): void {
 		activeSemanticTurn = { ...binding, sessionId, turnId: randomUUID() };
 		semanticRevision = 0;
 		pendingSemanticResult = "";
+		actionAfterRevision = 0;
+		handledActionKey = undefined;
+		cancelAckGate = undefined;
+		resolveCancelAckGate = undefined;
 		pi.appendEntry(TURN_ENTRY_TYPE, { ...activeSemanticTurn, eventRevision: 0 });
-		await reportSemanticTurn("starting");
+		const registered = await reportSemanticTurn("starting");
+		const socketPath = process.env.HERDR_SOCKET_PATH;
+		const client = socketPath ? getHerdrClient(socketPath) : undefined;
+		nativeActionsEnabled = registered && client?.protocolVersion === 22 && nativeCapability() !== undefined;
+		if (nativeActionsEnabled) startActionPolling(ctx);
 	};
 
 	const finishSemanticTurn = async (
@@ -392,8 +688,24 @@ export default function herdrReporter(pi: ExtensionAPI): void {
 		options: { result?: string; reason?: string } = {},
 	): Promise<void> => {
 		if (!activeSemanticTurn) return;
+		if (state !== "cancelled") stopActionPolling();
+		if (state === "cancelled" && nativeActionsEnabled) {
+			const acknowledged = cancelAckGate ? await cancelAckGate : false;
+			if (!acknowledged) {
+				state = "interrupted";
+				options = { reason: "XCSH cancelled outside an authenticated Herdr safe point" };
+			}
+		}
 		await reportSemanticTurn(state, options);
+		stopActionPolling();
 		activeSemanticTurn = undefined;
+		nativeActionsEnabled = false;
+		cancelAckGate = undefined;
+		resolveCancelAckGate = undefined;
+		if (cancelAckDeadlineTimer !== undefined) {
+			clearTimeout(cancelAckDeadlineTimer);
+			cancelAckDeadlineTimer = undefined;
+		}
 	};
 
 	const report = (state: "idle" | "working" | "blocked", message?: string): Promise<void> =>
@@ -571,7 +883,15 @@ export default function herdrReporter(pi: ExtensionAPI): void {
 			onError(new Error("Persisted Herdr turn binding does not match this execution"));
 			return false;
 		});
+		// Replay turn reports first. Herdr may have journaled revision 1 and lost
+		// the reply before confirming the cross-ledger native registration; the
+		// byte-identical starting replay repairs that gate before any action call.
 		for (const event of events.filter(event => !event.delivered)) await deliverSemanticEvent(event);
+		// A safe point is persisted before its acknowledgement is attempted. If
+		// the response was lost (or the producer restarted), replay the identical
+		// authenticated ACK only after starting registration has been reconciled,
+		// and before emitting the restart interruption receipt.
+		await replayPersistedActionAcks(ctx);
 		const last = events.at(-1);
 		const terminal = last && ["completed", "failed", "cancelled", "interrupted"].includes(last.state ?? "");
 		if (last && !terminal) {
@@ -751,6 +1071,7 @@ export default function herdrReporter(pi: ExtensionAPI): void {
 	// Relinquish pane authority so herdr stops showing xcsh once we exit.
 	pi.on("session_shutdown", async () => {
 		stopHeartbeat();
+		stopActionPolling();
 		await finishSemanticTurn("interrupted", { reason: "XCSH shut down before semantic settlement" });
 		await send(RELEASE_METHOD, {
 			pane_id: paneId,

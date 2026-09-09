@@ -3,9 +3,14 @@ import type { ExtensionAPI, ExtensionContext } from "@f5-sales-demo/xcsh";
 import nativeLifecycleControl, {
 	NATIVE_LIFECYCLE_CONTINUATION_TITLE,
 	NATIVE_LIFECYCLE_CONTROL_FLAG,
+	requestNativeLifecycleCancellation,
 } from "../src/extensibility/extensions/bundled/native-lifecycle-control";
 import { nativeLifecycleChildArgv, nativeLifecycleContract } from "../src/lifecycle/native-acceptance";
-import { currentXcshCommand, NATIVE_LIFECYCLE_SCENARIOS } from "../src/lifecycle/native-acceptance-driver";
+import {
+	currentXcshCommand,
+	NATIVE_LIFECYCLE_SCENARIOS,
+	redactNativeLifecycleRequest,
+} from "../src/lifecycle/native-acceptance-driver";
 
 describe("native lifecycle acceptance contract", () => {
 	it("uses the documented reduced-discovery JSON child argv without an ephemeral session", () => {
@@ -37,16 +42,27 @@ describe("native lifecycle acceptance contract", () => {
 
 	it("requires exact path resume and documents real process controls", () => {
 		const contract = nativeLifecycleContract();
-		expect(contract.version).toBe(1);
+		expect(contract.version).toBe(2);
 		expect(contract.session_id).toBe("^[0-9a-f]{16}$");
+		expect(contract.session_dir).toContain("absolute directory");
+		expect(contract.session_header_sha256).toContain("terminating LF byte");
+		expect(contract.model).toContain("non-secret");
 		expect(contract.controls).toEqual({
 			resume: "--resume <exact-session-path>",
 			cancel: "PtySession.interrupt() sends SIGINT to the native child process group",
+			managed_cancel:
+				"protocol 22 agent.turn.action.get/ack cooperatively aborts the active ExtensionUIController and AgentSession",
 			await_user: "--native-lifecycle-control await-user uses the interactive ExtensionUiController",
 			continuation: "write the continuation and Enter to the same native PTY",
 			replay: "restart --resume <exact-session-path> with the same authenticated binding",
 		});
 		expect(contract.scenarios).toEqual(NATIVE_LIFECYCLE_SCENARIOS);
+		expect(contract.reporter).toEqual({
+			protocol: 22,
+			capability_env: "HERDR_NATIVE_CAPABILITY",
+			capability_persistence: "never",
+			actions: ["cancel:1:requested", "cancel:1:safe_point", "cancel:1:timed_out"],
+		});
 	});
 
 	it("builds interactive and exact-path resume children without print mode", () => {
@@ -77,6 +93,16 @@ describe("native lifecycle acceptance contract", () => {
 		expect(currentXcshCommand(["--version"], ["/opt/xcsh", "lifecycle"], "/opt/xcsh")).toBe(
 			"'/opt/xcsh' '--version'",
 		);
+	});
+
+	it("redacts the request-only native capability from executable receipts", () => {
+		expect(
+			redactNativeLifecycleRequest({
+				execution_id: "execution-1",
+				native_capability: "must-not-escape",
+				state: "starting",
+			}),
+		).toEqual({ execution_id: "execution-1", state: "starting" });
 	});
 });
 
@@ -138,6 +164,30 @@ describe("native lifecycle control", () => {
 			abort,
 			ui: { input: async () => undefined },
 		} as unknown as ExtensionContext);
+		expect(abort).toHaveBeenCalledTimes(1);
+	});
+
+	it("exposes the active ExtensionUIController abort signal as a cooperative safe point", async () => {
+		const { handlers } = loadControl("await-user");
+		const abort = vi.fn();
+		let promptSignal: AbortSignal | undefined;
+		const pending = handlers.get("before_agent_start")?.({}, {
+			hasUI: true,
+			abort,
+			ui: {
+				input: (_title: string, _placeholder: string, options: { signal?: AbortSignal }) =>
+					new Promise<undefined>(resolve => {
+						promptSignal = options.signal;
+						options.signal?.addEventListener("abort", () => resolve(undefined), { once: true });
+					}),
+			},
+		} as unknown as ExtensionContext);
+		await Promise.resolve();
+		expect(promptSignal).toBeDefined();
+		expect(requestNativeLifecycleCancellation("Herdr cancel action")).toBe(true);
+		await pending;
+		expect(promptSignal?.aborted).toBe(true);
+		expect(requestNativeLifecycleCancellation("late action")).toBe(false);
 		expect(abort).toHaveBeenCalledTimes(1);
 	});
 });

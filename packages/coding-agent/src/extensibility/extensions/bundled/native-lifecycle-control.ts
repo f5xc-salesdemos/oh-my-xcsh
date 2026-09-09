@@ -6,6 +6,20 @@ export const NATIVE_LIFECYCLE_CONTINUATION_TITLE = "Native lifecycle continuatio
 
 type NativeLifecycleControl = "await-user";
 
+let activeManagedCancellation: ((reason: string) => void) | undefined;
+
+/**
+ * Abort an acceptance prompt at its real ExtensionUIController signal boundary.
+ * The protocol-22 reporter also aborts the AgentSession through its current
+ * ExtensionContext; this hook only owns the interactive prompt that would
+ * otherwise remain open while the session cancellation unwinds.
+ */
+export function requestNativeLifecycleCancellation(reason: string): boolean {
+	if (!activeManagedCancellation) return false;
+	activeManagedCancellation(reason);
+	return true;
+}
+
 function configuredControl(pi: ExtensionAPI): NativeLifecycleControl | undefined {
 	const value = pi.getFlag(NATIVE_LIFECYCLE_CONTROL_FLAG);
 	return value === "await-user" ? value : undefined;
@@ -45,6 +59,10 @@ export default function nativeLifecycleControl(pi: ExtensionAPI): void {
 		const controller = new AbortController();
 		activeController = controller;
 		activeContext = ctx;
+		const managedCancellation = (reason: string): void => {
+			controller.abort(reason);
+		};
+		activeManagedCancellation = managedCancellation;
 		removeSigintInterceptor = postmortem.interceptSignal(postmortem.Reason.SIGINT, () => {
 			onSigint();
 			return true;
@@ -65,6 +83,7 @@ export default function nativeLifecycleControl(pi: ExtensionAPI): void {
 				},
 			};
 		} finally {
+			if (activeManagedCancellation === managedCancellation) activeManagedCancellation = undefined;
 			removeSigintInterceptor?.();
 			removeSigintInterceptor = undefined;
 			activeController = undefined;
@@ -73,6 +92,7 @@ export default function nativeLifecycleControl(pi: ExtensionAPI): void {
 	});
 
 	pi.on("session_shutdown", () => {
+		activeManagedCancellation = undefined;
 		removeSigintInterceptor?.();
 		removeSigintInterceptor = undefined;
 		activeController?.abort("native lifecycle shutdown");
