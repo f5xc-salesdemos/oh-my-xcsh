@@ -7,6 +7,7 @@ const fs = require("node:fs");
 const { createRequire } = require("node:module");
 const os = require("node:os");
 const path = require("node:path");
+const { ensureEmbeddedAddon } = require("./embedded-extraction");
 const { getInstalledNativeCandidates, loadInstalledBeforeFallback, tryLoadCandidates } = require("./installed-paths");
 
 function getNativesDir() {
@@ -212,14 +213,8 @@ function maybeExtractEmbeddedAddon(errors) {
 		return null;
 	}
 
-	if (fs.existsSync(targetPath)) {
-		return targetPath;
-	}
-
 	try {
-		const buffer = fs.readFileSync(selectedEmbeddedFile.filePath);
-		fs.writeFileSync(targetPath, buffer);
-		return targetPath;
+		return ensureEmbeddedAddon({ sourcePath: selectedEmbeddedFile.filePath, targetPath });
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
 		errors.push(`embedded addon write (${selectedEmbeddedFile.filename}): ${message}`);
