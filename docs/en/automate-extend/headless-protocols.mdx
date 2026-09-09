@@ -24,7 +24,10 @@ Use a dedicated session directory when the JSON stream must survive process loss
 xcsh --mode json --session-dir /var/lib/my-controller/xcsh-sessions -p "Return one sentence"
 ```
 
-The first stdout line is a `SessionHeader`. Its `id` is a 16-character lowercase hexadecimal XCSH session ID. With `--session-dir`, xcsh atomically writes and fsyncs the matching `<timestamp>_<id>.jsonl` file before emitting that header; the header's persisted `cwd`, `id`, and timestamp are the resumable record. Keep the path discovered in the session directory (or resolve the ID there), then continue through the documented resume argument:
+The first stdout line is a `SessionHeader`. Its `id` is a 16-character lowercase hexadecimal XCSH session ID.
+With `--session-dir`, xcsh atomically writes and fsyncs the matching `<timestamp>_<id>.jsonl` file before
+emitting that header. The header's persisted `cwd`, `id`, and timestamp are the resumable record. Keep the path
+discovered in the session directory (or resolve the ID there), then continue through the documented resume argument:
 
 ```bash
 xcsh --resume /var/lib/my-controller/xcsh-sessions/<timestamp>_<id>.jsonl "Continue the task"
