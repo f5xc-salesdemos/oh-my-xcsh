@@ -1,7 +1,7 @@
 {
 	"type": "module",
 	"name": "@f5-sales-demo/xcsh-stats",
-	"version": "21.19.5",
+	"version": "21.20.0",
 	"description": "Local observability dashboard for pi AI usage statistics",
 	"homepage": "https://github.com/f5-sales-demo/xcsh",
 	"author": "Can Boluk",
