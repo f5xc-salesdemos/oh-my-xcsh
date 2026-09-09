@@ -208,6 +208,7 @@ describe("herdr-reporter extension", () => {
 	const originalPaneId = process.env.HERDR_PANE_ID;
 	const originalSocket = process.env.HERDR_SOCKET_PATH;
 	const originalExecutionId = process.env.HERDR_EXECUTION_ID;
+	const originalExecutionGeneration = process.env.HERDR_EXECUTION_GENERATION;
 
 	afterEach(() => {
 		vi.restoreAllMocks();
@@ -217,6 +218,8 @@ describe("herdr-reporter extension", () => {
 		else process.env.HERDR_SOCKET_PATH = originalSocket;
 		if (originalExecutionId === undefined) delete process.env.HERDR_EXECUTION_ID;
 		else process.env.HERDR_EXECUTION_ID = originalExecutionId;
+		if (originalExecutionGeneration === undefined) delete process.env.HERDR_EXECUTION_GENERATION;
+		else process.env.HERDR_EXECUTION_GENERATION = originalExecutionGeneration;
 	});
 
 	it("emits state-neutral heartbeats every 10 seconds and cancels them before release", async () => {
@@ -424,6 +427,7 @@ describe("herdr-reporter extension", () => {
 			process.env.HERDR_PANE_ID = "w1:p1";
 			process.env.HERDR_SOCKET_PATH = herdr.socketPath;
 			process.env.HERDR_EXECUTION_ID = "execution-1";
+			process.env.HERDR_EXECUTION_GENERATION = "1";
 			const { pi, handlers, entries } = makeMockPi();
 			const ctx = {
 				isIdle: () => true,
@@ -452,11 +456,89 @@ describe("herdr-reporter extension", () => {
 			expect(turns.map(turn => turn.state)).toEqual(["starting", "working", "completed"]);
 			expect(turns.map(turn => turn.event_revision)).toEqual([1, 2, 3]);
 			expect(turns[0]?.session_id).toBe("session-1");
+			expect(turns.every(turn => turn.generation === 1)).toBe(true);
 			expect(turns[0]?.turn_id).toBeString();
 			expect(turns[2]?.turn_id).toBe(turns[0]?.turn_id);
 			expect(turns[2]?.result).toBe("durable result");
 			expect(turns[2]?.result_digest).toMatch(/^[0-9a-f]{64}$/);
 			expect(entries.at(-1)?.data).toMatchObject({ state: "completed", delivered: true });
+		} finally {
+			await herdr.close();
+		}
+	});
+
+	it("replays a persisted producer event after a real socket transport loss", async () => {
+		const failedHerdr = await startFakeHerdr({
+			protocol: 20,
+			capabilities: { agent_turn_journal: true },
+			failMethods: new Set(["agent.turn.report"]),
+		});
+		try {
+			process.env.HERDR_PANE_ID = "w1:p1";
+			process.env.HERDR_SOCKET_PATH = failedHerdr.socketPath;
+			process.env.HERDR_EXECUTION_ID = "execution-1";
+			process.env.HERDR_EXECUTION_GENERATION = "1";
+			const first = makeMockPi();
+			const ctx = {
+				isIdle: () => true,
+				sessionManager: {
+					getSessionId: () => "session-1",
+					getSessionFile: () => "/tmp/session-1.jsonl",
+					getEntries: () => first.entries.map(({ customType, data }) => ({ type: "custom", customType, data })),
+				},
+			} as unknown as ExtensionContext;
+			herdrReporter(first.pi);
+			await first.handlers.get("before_agent_start")?.({ type: "before_agent_start", prompt: "private" }, ctx);
+			await waitFor(() => first.entries.some(entry => (entry.data as { state?: string }).state === "starting"));
+			expect(first.entries.some(entry => (entry.data as { delivered?: boolean }).delivered === true)).toBe(false);
+
+			const recoveredHerdr = await startFakeHerdr({ protocol: 20, capabilities: { agent_turn_journal: true } });
+			try {
+				process.env.HERDR_SOCKET_PATH = recoveredHerdr.socketPath;
+				const second = makeMockPi();
+				const replayCtx = {
+					...ctx,
+					sessionManager: {
+						...(ctx as { sessionManager: object }).sessionManager,
+						getEntries: () => first.entries.map(({ customType, data }) => ({ type: "custom", customType, data })),
+					},
+				} as unknown as ExtensionContext;
+				herdrReporter(second.pi);
+				await second.handlers.get("session_start")?.({}, replayCtx);
+				await waitFor(
+					() => recoveredHerdr.received.filter(frame => frame.method === "agent.turn.report").length === 2,
+				);
+				const events = recoveredHerdr.received
+					.filter(frame => frame.method === "agent.turn.report")
+					.map(frame => frame.params);
+				expect(events.map(event => [event.state, event.generation, event.event_revision])).toEqual([
+					["starting", 1, 1],
+					["interrupted", 1, 2],
+				]);
+			} finally {
+				await recoveredHerdr.close();
+			}
+		} finally {
+			await failedHerdr.close();
+		}
+	});
+
+	it("does not guess a journal generation when the execution backend omitted one", async () => {
+		const herdr = await startFakeHerdr({ protocol: 20, capabilities: { agent_turn_journal: true } });
+		try {
+			process.env.HERDR_PANE_ID = "w1:p1";
+			process.env.HERDR_SOCKET_PATH = herdr.socketPath;
+			process.env.HERDR_EXECUTION_ID = "execution-1";
+			delete process.env.HERDR_EXECUTION_GENERATION;
+			const { pi, handlers, entries } = makeMockPi();
+			const ctx = {
+				isIdle: () => true,
+				sessionManager: { getSessionId: () => "session-1", getEntries: () => entries },
+			} as unknown as ExtensionContext;
+			herdrReporter(pi);
+			await handlers.get("before_agent_start")?.({ type: "before_agent_start", prompt: "private" }, ctx);
+			await new Promise(resolve => setTimeout(resolve, 20));
+			expect(herdr.received.some(frame => frame.method === "agent.turn.report")).toBe(false);
 		} finally {
 			await herdr.close();
 		}
@@ -468,6 +550,7 @@ describe("herdr-reporter extension", () => {
 			process.env.HERDR_PANE_ID = "w1:p1";
 			process.env.HERDR_SOCKET_PATH = herdr.socketPath;
 			process.env.HERDR_EXECUTION_ID = "execution-1";
+			process.env.HERDR_EXECUTION_GENERATION = "1";
 			const { pi, handlers, entries } = makeMockPi();
 			entries.push(
 				{
@@ -475,7 +558,7 @@ describe("herdr-reporter extension", () => {
 					data: {
 						sessionId: "session-1",
 						turnId: "stable-turn",
-						generation: 0,
+						generation: 1,
 						eventRevision: 1,
 						state: "starting",
 						delivered: false,
@@ -486,7 +569,7 @@ describe("herdr-reporter extension", () => {
 					data: {
 						sessionId: "session-1",
 						turnId: "stable-turn",
-						generation: 0,
+						generation: 1,
 						eventRevision: 2,
 						state: "working",
 						delivered: false,
@@ -526,6 +609,7 @@ describe("herdr-reporter extension", () => {
 			process.env.HERDR_PANE_ID = "w1:p1";
 			process.env.HERDR_SOCKET_PATH = herdr.socketPath;
 			process.env.HERDR_EXECUTION_ID = "execution-1";
+			process.env.HERDR_EXECUTION_GENERATION = "1";
 			const { pi, handlers, entries } = makeMockPi();
 			const ctx = {
 				isIdle: () => false,

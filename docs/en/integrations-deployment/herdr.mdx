@@ -25,6 +25,12 @@ Connection and framing failures surface as integration diagnostics. The client m
 XCSH publishes native turn phases rather than inferring completion from terminal idleness or process exit. With Herdr protocol 20 and the advertised `agent_turn_journal` capability, a tracked execution publishes a persisted session/turn identity and a bounded semantic result to Herdr's durable journal. The existing 80-character metadata preview remains display-only and is never completion evidence.
 Commentary, prompt content, tool data, and failed or cancelled partial output are excluded.
 
+### External execution driver contract
+
+The supported producer is the normal `xcsh` executable launched by Herdr's execution backend; it is not a mock or a no-provider/offline actor. For a journal-tracked invocation, that backend must inject the exact allocated `HERDR_EXECUTION_ID` and decimal safe-integer `HERDR_EXECUTION_GENERATION` into the child environment before it starts `xcsh`. XCSH never guesses a generation: without both values it retains ordinary pane lifecycle reporting but emits no semantic journal event. A continuation must be launched with its newly allocated generation.
+
+The control/manager side owns translating `execution.cancel` to the child cancellation mechanism. XCSH then reports its native `cancelled` phase; asking a model to say it was cancelled is not a lifecycle event. Likewise, an input wait is only journaled after native `awaiting_user`, not from prose that asks a question.
+
 Session shutdown releases pane authority. It does not convert an unfinished turn into a successful completion.
 
 The verified contract is:

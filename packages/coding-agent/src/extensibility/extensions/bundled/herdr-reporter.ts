@@ -72,6 +72,7 @@ const PHASE_LABEL_TTL_MS = 60_000;
 const RESULT_MAX_CHARS = 80;
 const SEMANTIC_RESULT_MAX_BYTES = 8_000;
 const TURN_ENTRY_TYPE = "herdr.semantic-turn";
+const EXECUTION_GENERATION_ENV = "HERDR_EXECUTION_GENERATION";
 const SETTLED_TURN_RECONCILE_DELAY_MS = 25;
 const PROMPT_BLOCKED_REASONS = {
 	select: "selection required",
@@ -109,6 +110,20 @@ interface PersistedTurn {
 	reason?: string;
 	resultDigest?: string;
 	delivered?: boolean;
+}
+
+/**
+ * A journal event is authenticated to one execution generation. The execution
+ * backend, rather than the reporter, owns that value: guessing a generation
+ * would let an old process write into a continuation's journal. Keep ordinary
+ * pane reporting available when it is absent, but do not start semantic
+ * tracking until the backend has supplied a safe integer generation.
+ */
+function executionGeneration(): number | undefined {
+	const raw = process.env[EXECUTION_GENERATION_ENV];
+	if (raw === undefined || !/^(?:0|[1-9][0-9]*)$/.test(raw)) return undefined;
+	const generation = Number(raw);
+	return Number.isSafeInteger(generation) ? generation : undefined;
 }
 
 function persistedTurns(ctx: ExtensionContext): PersistedTurn[] {
@@ -335,9 +350,11 @@ export default function herdrReporter(pi: ExtensionAPI): void {
 	};
 
 	const beginSemanticTurn = async (ctx: ExtensionContext): Promise<void> => {
+		const generation = executionGeneration();
+		if (!process.env.HERDR_EXECUTION_ID || generation === undefined) return;
 		const sessionId = ctx.sessionManager?.getSessionId?.();
 		if (typeof sessionId !== "string" || !sessionId) return;
-		activeSemanticTurn = { sessionId, turnId: randomUUID(), generation: 0 };
+		activeSemanticTurn = { sessionId, turnId: randomUUID(), generation };
 		semanticRevision = 0;
 		pendingSemanticResult = "";
 		pi.appendEntry(TURN_ENTRY_TYPE, { ...activeSemanticTurn, eventRevision: 0 });
@@ -509,7 +526,12 @@ export default function herdrReporter(pi: ExtensionAPI): void {
 				byRevision.set(`${event.sessionId}:${event.turnId}:${event.generation}:${event.eventRevision}`, event);
 			}
 		}
-		const events = [...byRevision.values()];
+		const generation = executionGeneration();
+		const events = [...byRevision.values()].filter(event => {
+			if (generation === undefined || event.generation === generation) return true;
+			onError(new Error("Persisted Herdr turn generation does not match this execution"));
+			return false;
+		});
 		for (const event of events.filter(event => !event.delivered)) await deliverSemanticEvent(event);
 		const last = events.at(-1);
 		const terminal = last && ["completed", "failed", "cancelled", "interrupted"].includes(last.state ?? "");
