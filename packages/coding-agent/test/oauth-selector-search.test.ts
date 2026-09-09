@@ -75,6 +75,51 @@ describe("OAuthSelectorComponent provider search", () => {
 		expect(rendered).not.toContain("logged in");
 	});
 
+	it("preserves the keyless label after successful validation", async () => {
+		const selector = createSelector("login", false, {
+			getAccessState: provider => ({
+				provider,
+				credentialSource: provider === "vllm" ? "keyless" : undefined,
+				status: provider === "vllm" ? "connected" : "unconfigured",
+				catalogFreshness: provider === "vllm" ? "fresh" : "none",
+				selectable: provider === "vllm",
+			}),
+			validateAccess: async provider => ({
+				provider,
+				credentialSource: "keyless",
+				status: "connected",
+				catalogFreshness: "fresh",
+				selectable: true,
+			}),
+		}).selector;
+		for (const character of "vllm") selector.handleInput(character);
+		await Bun.sleep(0);
+
+		const rendered = renderText(selector);
+		expect(rendered).toContain("keyless configured");
+		expect(rendered).not.toContain(" connected");
+		expect(rendered).not.toContain("logged in");
+	});
+
+	it("reports an unreachable keyless provider instead of claiming it is configured", async () => {
+		const selector = createSelector("login", false, {
+			getAccessState: provider => ({
+				provider,
+				credentialSource: provider === "vllm" ? "keyless" : undefined,
+				status: provider === "vllm" ? "unreachable" : "unconfigured",
+				catalogFreshness: "none",
+				selectable: false,
+			}),
+		}).selector;
+		for (const character of "vllm") selector.handleInput(character);
+
+		const rendered = renderText(selector);
+		expect(rendered).toContain("unreachable");
+		expect(rendered).not.toContain("keyless configured");
+		expect(rendered).not.toContain(" connected");
+		expect(rendered).not.toContain("logged in");
+	});
+
 	it("renders a bounded provider viewport with position and input guidance", () => {
 		const { selector } = createSelector();
 		const providerCount = getLoginOptions().length;
