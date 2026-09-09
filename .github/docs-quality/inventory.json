@@ -862,6 +862,16 @@
           ]
         },
         {
+          "text": "How do I retain and resume a JSON-mode session?",
+          "readerQuestion": "How do I retain and resume a JSON-mode session?",
+          "purpose": "Explain the durable JSON session-header and resume-path contract for headless automation.",
+          "evidence": [
+            "source-authority",
+            "candidate-cli"
+          ],
+          "legacyConceptIds": []
+        },
+        {
           "text": "When do I use the software development kit (SDK) instead?",
           "readerQuestion": "When do I use the software development kit (SDK) instead?",
           "purpose": "Answer this question within Headless modes: When do I use the software development kit (SDK) instead?",

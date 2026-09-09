@@ -1,7 +1,12 @@
 import { describe, expect, it, mock } from "bun:test";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import type { AssistantMessage } from "@f5-sales-demo/pi-ai";
+import { Snowflake } from "@f5-sales-demo/pi-utils";
 import { runPrintMode } from "../../src/modes/print-mode";
 import type { AgentSession } from "../../src/session/agent-session";
+import { SessionManager } from "../../src/session/session-manager";
 
 function assistantMessage(
 	stopReason: "stop" | "error" | "aborted",
@@ -27,10 +32,16 @@ function assistantMessage(
 	};
 }
 
-function fakeSession(message: AssistantMessage): { session: AgentSession; dispose: ReturnType<typeof mock> } {
+function fakeSession(
+	message: AssistantMessage,
+	sessionManager: Pick<SessionManager, "getHeader" | "ensureOnDisk"> = {
+		getHeader: () => null,
+		ensureOnDisk: async () => {},
+	},
+): { session: AgentSession; dispose: ReturnType<typeof mock> } {
 	const dispose = mock(async () => {});
 	const session = {
-		sessionManager: { getHeader: () => null },
+		sessionManager,
 		model: undefined,
 		thinkingLevel: undefined,
 		extensionRunner: undefined,
@@ -107,6 +118,36 @@ describe("print mode result", () => {
 			expect(stdout).toBe("Answer one.\nAnswer two.\n");
 		} finally {
 			process.stdout.write = originalWrite;
+		}
+	});
+
+	it("persists the JSON header before advertising its resumable session", async () => {
+		const sessionDir = fs.mkdtempSync(path.join(os.tmpdir(), `xcsh-json-header-${Snowflake.next()}-`));
+		const sessionManager = SessionManager.create(sessionDir, sessionDir);
+		const header = sessionManager.getHeader();
+		if (!header) throw new Error("Expected persistent session header");
+		const sessionFile = sessionManager.getSessionFile();
+		if (!sessionFile) throw new Error("Expected persistent session path");
+		const { session } = fakeSession(assistantMessage("stop"), sessionManager);
+		let stdout = "";
+		const originalWrite = process.stdout.write;
+		process.stdout.write = ((chunk: string | Uint8Array, callback?: (error?: Error | null) => void) => {
+			stdout += chunk.toString();
+			callback?.();
+			return true;
+		}) as typeof process.stdout.write;
+
+		try {
+			await runPrintMode(session, { mode: "json" });
+			const advertisedHeader = JSON.parse(stdout.trim()) as { id?: unknown };
+			expect(advertisedHeader.id).toBe(header.id);
+			expect(header.id).toMatch(/^[0-9a-f]{16}$/);
+			expect(fs.existsSync(sessionFile)).toBe(true);
+			expect(JSON.parse(fs.readFileSync(sessionFile, "utf8")).id).toBe(header.id);
+			expect((await SessionManager.open(sessionFile, sessionDir)).getHeader()?.id).toBe(header.id);
+		} finally {
+			process.stdout.write = originalWrite;
+			fs.rmSync(sessionDir, { recursive: true, force: true });
 		}
 	});
 });
