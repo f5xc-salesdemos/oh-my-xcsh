@@ -22,7 +22,7 @@ Connection and framing failures surface as integration diagnostics. The client m
 
 ## What lifecycle state does xcsh publish?
 
-XCSH publishes native turn phases rather than inferring completion from terminal idleness or process exit. With Herdr protocol 20 and the advertised `agent_turn_journal` capability, a tracked execution publishes a persisted session/turn identity and a bounded semantic result to Herdr's durable journal. The existing 80-character metadata preview remains display-only and is never completion evidence.
+XCSH publishes native turn phases rather than inferring completion from terminal idleness or process exit. With Herdr protocol 20 or 22 and the advertised `agent_turn_journal` capability, a tracked execution publishes a persisted session/turn identity and a bounded semantic result to Herdr's durable journal. The existing 80-character metadata preview remains display-only and is never completion evidence.
 Commentary, prompt content, tool data, and failed or cancelled partial output are excluded.
 
 ### External execution driver contract
@@ -31,13 +31,20 @@ The supported producer is the normal `xcsh` executable launched by Herdr's execu
 
 XCSH never guesses a generation: without both values it retains ordinary pane lifecycle reporting but emits no semantic journal event. A continuation must be launched with its newly allocated generation.
 
-The control/manager side owns translating `execution.cancel` to the child cancellation mechanism. XCSH then reports its native `cancelled` phase; asking a model to say it was cancelled is not a lifecycle event. Likewise, an input wait is only journaled after native `awaiting_user`, not from prose that asks a question.
+Protocol 22 adds producer-native controls. Herdr injects a one-time `HERDR_NATIVE_CAPABILITY` into the child. XCSH includes it only in authenticated turn-report and action requests; it is never written to the session journal, logs, diagnostics, or receipts.
+Herdr does not authorize actions until the first `starting` report has been durably journaled and bound to the owned PTY, pane, session, generation, and turn.
+
+The producer wire shapes align with [Herdr PR #49](https://github.com/f5-sales-demo/herdr/pull/49) at cancellation-settlement commit `2c838cf545ed06439b4988cedb3e044f1d436264`, starting-replay recovery commit `edd5611cfd7685c0f069f244ceee0ac6c0a0678e`, and native-argv alignment commit `3397302960593a552fb37ceb71053cf99f2619a3`.
+Those commits are an integration contract under independent review, not released-backend evidence.
+
+After that registration, XCSH polls `agent.turn.action.get` with the same immutable provenance. A `cancel` action dismisses an active managed UI prompt and calls the real `AgentSession` abort path. XCSH persists the requested action and local safe point before sending the exact `agent.turn.action.ack`; it emits `cancelled` only after Herdr confirms that safe point.
+A lost ACK response is retried with the same action ID and revision, including after reporter restart. A backend `timed_out` action never triggers a late abort. PTY exit alone is not semantic cancellation.
 
 Session shutdown releases pane authority. It does not convert an unfinished turn into a successful completion.
 
 ### Producer-native acceptance driver
 
-`xcsh lifecycle --json` prints the version 1 machine-readable producer contract. To execute a source or installed
+`xcsh lifecycle --json` prints the version 2 machine-readable producer contract. To execute a source or installed
 producer check, supply a fresh absolute session directory, a normally configured model, and one scenario:
 
 ```bash
@@ -47,11 +54,16 @@ xcsh lifecycle --json \
   --session-dir /absolute/fresh/xcsh-lifecycle-session
 ```
 
-Supported scenarios are `success`, `failure`, `await-continue`, `cancel`, and `reply-loss-replay`. The driver first
+Supported scenarios are `success`, `failure`, `await-continue`, `cancel`, `managed-cancel`, `managed-working-cancel`, and `reply-loss-replay`. The driver first
 uses the prompt-free JSON session contract to persist one canonical 16-character lowercase hexadecimal session
 header, then reopens that exact path in an ordinary interactive XCSH child. It generates a random mode-0600 fixture
 for successful reads. `await-continue` pauses in the real `ExtensionUiController` input surface before the configured
 model runs; `cancel` sends SIGINT through `PtySession.interrupt()` and requires XCSH's native `cancelled` transition.
+`managed-cancel` uses a local protocol-22 control fixture to request the action and requires the executable child to
+acknowledge its safe point before its native `cancelled` report. That fixture validates the producer adapter only; it
+is not evidence for Herdr's durable action journal, manager generation replacement, or consumer deduplication.
+`managed-working-cancel` requests the same cooperative action after the real child reports `working`, without opening
+the acceptance prompt, and verifies cancellation through the active `AgentSession` path.
 
 The reply-loss scenario owns a temporary local protocol-20 socket that acknowledges ordinary reporter traffic but
 drops exactly one `agent.turn.report` reply. XCSH creates and persists the semantic event before transport, runs the
@@ -73,10 +85,11 @@ The verified contract is:
 | Waiting for input/approval | `awaiting_user` and closed prompt kind | `waiting_input` with fixed safe reason; private prompt content is excluded. |
 | Successful completion | Settlement-aware `idle` after `agent_end` | `completed` with at most 8,000 UTF-8 bytes and a matching SHA-256 digest. |
 | Failure/cancellation | `error` or `cancelled` | Distinct terminal state and bounded safe reason; no partial result. |
+| Managed cancellation | Persisted action receipt, Extension UI signal, and `AgentSession.abort()` | Authenticated `safe_point` precedes and is linked to the native `cancelled` report. |
 | Resume/fork | Session events and persisted custom turn entries | Resume preserves identity; unfinished recovered work becomes `interrupted`; fork has separate session lineage. |
 | Reconnect/order | Serialized queue and persisted event revision | Exact duplicates are idempotent; stale/conflicting revisions fail; terminal state is immutable. |
 | Application exit | `session_shutdown` | Active turn becomes `interrupted`, then pane authority is released; never success. |
 
-XCSH implementation is tracked by [issue #3768](https://github.com/f5-sales-demo/xcsh/issues/3768). The complete cross-project work packages and acceptance gates are in [Herdr native signaling gap-closing plan](../architecture-contribution/herdr-gap-closing-plan).
+The protocol-22 producer integration is tracked by [issue #3791](https://github.com/f5-sales-demo/xcsh/issues/3791); its lifecycle foundation is tracked by [issue #3768](https://github.com/f5-sales-demo/xcsh/issues/3768). The complete cross-project work packages and acceptance gates are in [Herdr native signaling gap-closing plan](../architecture-contribution/herdr-gap-closing-plan).
 
 Herdr lifecycle reconciliation is tracked by issue #5 in the F5 Herdr fork. Current source already recognizes the exact `("herdr:xcsh", "xcsh")` resume pair; deployed build provenance and live resume/fork acceptance remain required before feature acceptance.

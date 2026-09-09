@@ -21,10 +21,18 @@ interface TurnAttempt {
 	replyLost: boolean;
 }
 
+interface ActionAttempt {
+	ordinal: number;
+	method: "agent.turn.action.get" | "agent.turn.action.ack";
+	params: Record<string, unknown>;
+}
+
 interface ReporterTransport {
 	socketPath: string;
 	attempts: TurnAttempt[];
+	actionAttempts: ActionAttempt[];
 	requests: string[];
+	requestCancel: () => void;
 	waitFor: (predicate: (attempt: TurnAttempt) => boolean, afterOrdinal?: number) => Promise<TurnAttempt>;
 	close: () => Promise<void>;
 }
@@ -51,9 +59,10 @@ export interface NativeLifecycleReceipt {
 	status: "passed";
 	evidenceClass: "source_native_child";
 	fixture: { path: string; value: string };
-	session: { id: string; path: string };
+	session: { id: string; path: string; headerSha256: string };
 	childRuns: Array<{ exitCode?: number; cancelled: boolean; timedOut: boolean }>;
 	turnAttempts: TurnAttempt[];
+	actionAttempts: ActionAttempt[];
 	control: Record<string, unknown>;
 }
 
@@ -67,6 +76,11 @@ function sameTurnFrame(left: Record<string, unknown>, right: Record<string, unkn
 	return JSON.stringify(left) === JSON.stringify(right);
 }
 
+export function redactNativeLifecycleRequest(params: Record<string, unknown>): Record<string, unknown> {
+	const { native_capability: _nativeCapability, ...safe } = params;
+	return safe;
+}
+
 export function currentXcshCommand(args: string[], argv = process.argv, execPath = process.execPath): string {
 	const script = argv[1];
 	const executable = path.basename(execPath).toLowerCase();
@@ -77,11 +91,12 @@ export function currentXcshCommand(args: string[], argv = process.argv, execPath
 
 async function startReporterTransport(
 	directory: string,
-	options: { loseFirstTurnReply: boolean },
+	options: { loseFirstTurnReply: boolean; managedCancel: boolean },
 ): Promise<ReporterTransport> {
 	const socketPath = path.join(directory, `.native-lifecycle-${randomUUID()}.sock`);
 	const attempts: TurnAttempt[] = [];
 	const requests: string[] = [];
+	const actionAttempts: ActionAttempt[] = [];
 	const sockets = new Set<net.Socket>();
 	const waiters = new Set<{
 		predicate: (attempt: TurnAttempt) => boolean;
@@ -91,6 +106,17 @@ async function startReporterTransport(
 	}>();
 	let handshakeComplete = false;
 	let lostReply = false;
+	let cancellationRequested = false;
+	let cancellationAcknowledged = false;
+	let registeredTurnId: string | undefined;
+	const cancelAction = () => ({
+		backend_execution_id: "native-lifecycle-backend",
+		action_id: "cancel",
+		action_revision: 1,
+		state: cancellationAcknowledged ? "safe_point" : "requested",
+		requested_at_unix_ms: 1,
+		...(cancellationAcknowledged ? { acknowledged_at_unix_ms: 2, turn_id: registeredTurnId } : {}),
+	});
 
 	const publish = (attempt: TurnAttempt): void => {
 		for (const waiter of waiters) {
@@ -118,7 +144,7 @@ async function startReporterTransport(
 				if (request.method === "ping") {
 					handshakeComplete = true;
 					socket.end(
-						`${JSON.stringify({ id: request.id, result: { type: "pong", protocol: 20, version: "native-lifecycle", capabilities: { agent_turn_journal: true } } })}\n`,
+						`${JSON.stringify({ id: request.id, result: { type: "pong", protocol: options.managedCancel ? 22 : 20, version: "native-lifecycle", capabilities: { agent_turn_journal: true } } })}\n`,
 					);
 					continue;
 				}
@@ -129,6 +155,9 @@ async function startReporterTransport(
 					continue;
 				}
 				if (request.method === "agent.turn.report" && isRecord(request.params)) {
+					if (request.params.state === "starting" && typeof request.params.turn_id === "string") {
+						registeredTurnId = request.params.turn_id;
+					}
 					const replyLost = options.loseFirstTurnReply && !lostReply;
 					lostReply ||= replyLost;
 					const attempt = { ordinal: attempts.length + 1, params: request.params, replyLost };
@@ -138,6 +167,35 @@ async function startReporterTransport(
 						socket.destroy();
 						continue;
 					}
+					if (options.managedCancel) {
+						socket.end(
+							`${JSON.stringify({ id: request.id, result: { type: "agent_turn", turn: {}, admitted: true } })}\n`,
+						);
+						continue;
+					}
+				}
+				if (options.managedCancel && request.method === "agent.turn.action.get" && isRecord(request.params)) {
+					actionAttempts.push({
+						ordinal: actionAttempts.length + 1,
+						method: request.method,
+						params: request.params,
+					});
+					socket.end(
+						`${JSON.stringify({ id: request.id, result: { type: "agent_turn_action_list", actions: cancellationRequested ? [cancelAction()] : [] } })}\n`,
+					);
+					continue;
+				}
+				if (options.managedCancel && request.method === "agent.turn.action.ack" && isRecord(request.params)) {
+					actionAttempts.push({
+						ordinal: actionAttempts.length + 1,
+						method: request.method,
+						params: request.params,
+					});
+					cancellationAcknowledged = true;
+					socket.end(
+						`${JSON.stringify({ id: request.id, result: { type: "agent_turn_action", action: cancelAction(), admitted: true } })}\n`,
+					);
+					continue;
 				}
 				socket.end(`${JSON.stringify({ id: request.id, result: {} })}\n`);
 			}
@@ -155,7 +213,11 @@ async function startReporterTransport(
 	return {
 		socketPath,
 		attempts,
+		actionAttempts,
 		requests,
+		requestCancel: () => {
+			cancellationRequested = true;
+		},
 		waitFor: (predicate, afterOrdinal = 0) => {
 			const existing = attempts.find(attempt => attempt.ordinal > afterOrdinal && predicate(attempt));
 			if (existing) return Promise.resolve(existing);
@@ -234,17 +296,25 @@ async function prepareFixture(options: NativeLifecycleDriverOptions): Promise<{ 
 	return { path: fixturePath, value };
 }
 
-async function readCanonicalSession(sessionDir: string): Promise<{ id: string; path: string }> {
+async function readCanonicalSession(sessionDir: string): Promise<{ id: string; path: string; headerSha256: string }> {
 	const entries = await fs.readdir(sessionDir, { withFileTypes: true });
-	const candidates: Array<{ id: string; path: string }> = [];
+	const candidates: Array<{ id: string; path: string; headerSha256: string }> = [];
 	for (const entry of entries) {
 		if (!entry.isFile() || !entry.name.endsWith(".jsonl")) continue;
 		const sessionPath = path.join(sessionDir, entry.name);
-		const first = (await fs.readFile(sessionPath, "utf8")).split("\n", 1)[0];
+		const contents = await fs.readFile(sessionPath);
+		const newline = contents.indexOf(0x0a);
+		if (newline < 0) continue;
+		const firstBytes = contents.subarray(0, newline + 1);
+		const first = firstBytes.subarray(0, -1).toString("utf8");
 		if (!first) continue;
 		const header = JSON.parse(first) as Record<string, unknown>;
 		if (header.type === "session" && typeof header.id === "string" && /^[0-9a-f]{16}$/u.test(header.id)) {
-			candidates.push({ id: header.id, path: sessionPath });
+			candidates.push({
+				id: header.id,
+				path: sessionPath,
+				headerSha256: createHash("sha256").update(firstBytes).digest("hex"),
+			});
 		}
 	}
 	if (candidates.length !== 1) throw new Error(`Expected exactly one canonical session, found ${candidates.length}`);
@@ -300,6 +370,7 @@ export async function runNativeLifecycleAcceptance(
 	const fixture = await prepareFixture(options);
 	const transport = await startReporterTransport(options.sessionDir, {
 		loseFirstTurnReply: options.scenario === "reply-loss-replay",
+		managedCancel: options.scenario === "managed-cancel" || options.scenario === "managed-working-cancel",
 	});
 	const executionId = `xcsh-native-${randomUUID()}`;
 	const paneId = `native:${randomUUID()}`;
@@ -308,6 +379,9 @@ export async function runNativeLifecycleAcceptance(
 		HERDR_SOCKET_PATH: transport.socketPath,
 		HERDR_EXECUTION_ID: executionId,
 		HERDR_EXECUTION_GENERATION: "0",
+		...(options.scenario === "managed-cancel" || options.scenario === "managed-working-cancel"
+			? { HERDR_NATIVE_CAPABILITY: randomBytes(32).toString("hex") }
+			: {}),
 	};
 	const childRuns: NativeLifecycleReceipt["childRuns"] = [];
 	const control: Record<string, unknown> = {};
@@ -323,13 +397,27 @@ export async function runNativeLifecycleAcceptance(
 		const session = await readCanonicalSession(options.sessionDir);
 
 		let args = baseChildArgs(options, fixture, session.path);
-		if (options.scenario === "await-continue" || options.scenario === "cancel") {
+		if (
+			options.scenario === "await-continue" ||
+			options.scenario === "cancel" ||
+			options.scenario === "managed-cancel"
+		) {
 			args = [...args, NATIVE_LIFECYCLE_CONTROL_FLAG, "await-user"];
 		}
 		if (options.scenario === "failure") args = [...args, "--api-key", "native-lifecycle-invalid-credential"];
 		active = startChild(args, path.dirname(fixture.path), environment, timeoutMs);
+		if (options.scenario === "managed-working-cancel") {
+			const working = await withTimeout(transport.waitFor(stateIs("working")), timeoutMs, "working");
+			control.workingOrdinal = working.ordinal;
+			transport.requestCancel();
+			control.cancellation = "protocol22_cooperative_working_action";
+		}
 
-		if (options.scenario === "await-continue" || options.scenario === "cancel") {
+		if (
+			options.scenario === "await-continue" ||
+			options.scenario === "cancel" ||
+			options.scenario === "managed-cancel"
+		) {
 			const waiting = await withTimeout(transport.waitFor(stateIs("waiting_input")), timeoutMs, "waiting_input");
 			control.waitingOrdinal = waiting.ordinal;
 			if (options.scenario === "await-continue") {
@@ -337,16 +425,25 @@ export async function runNativeLifecycleAcceptance(
 				await Bun.sleep(25);
 				active.pty.write("\r");
 				control.continuation = "pty_input";
-			} else {
+			} else if (options.scenario === "cancel") {
 				active.pty.interrupt();
 				control.cancellation = "pty_process_group_sigint";
+			} else {
+				transport.requestCancel();
+				control.cancellation = "protocol22_cooperative_action";
 			}
 		}
 
 		const terminalAttempt = await withTimeout(transport.waitFor(terminal), timeoutMs, "terminal turn report");
 		control.terminalOrdinal = terminalAttempt.ordinal;
 		const expectedTerminal =
-			options.scenario === "failure" ? "failed" : options.scenario === "cancel" ? "cancelled" : "completed";
+			options.scenario === "failure"
+				? "failed"
+				: options.scenario === "cancel" ||
+						options.scenario === "managed-cancel" ||
+						options.scenario === "managed-working-cancel"
+					? "cancelled"
+					: "completed";
 		if (terminalAttempt.params.state !== expectedTerminal) {
 			throw new Error(
 				`Native child settled ${String(terminalAttempt.params.state)} instead of ${expectedTerminal}: ${active.outputTail()}`,
@@ -406,7 +503,14 @@ export async function runNativeLifecycleAcceptance(
 			fixture,
 			session,
 			childRuns,
-			turnAttempts: transport.attempts,
+			turnAttempts: transport.attempts.map(attempt => ({
+				...attempt,
+				params: redactNativeLifecycleRequest(attempt.params),
+			})),
+			actionAttempts: transport.actionAttempts.map(attempt => ({
+				...attempt,
+				params: redactNativeLifecycleRequest(attempt.params),
+			})),
 			control,
 		};
 	} catch (error) {
