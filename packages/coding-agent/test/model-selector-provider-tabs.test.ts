@@ -165,6 +165,7 @@ function selectorHarness(
 		antigravity?: boolean;
 		refreshProvider?: () => Promise<void>;
 		providerAllowlist?: string[];
+		ubuntuProviders?: boolean;
 	} = {},
 ) {
 	const sol = model("openai-codex", "gpt-5.6-sol", {
@@ -200,6 +201,8 @@ function selectorHarness(
 		thinking: createThinkingConfig([Effort.Low, Effort.Medium, Effort.High]),
 	});
 	const ollama = model("ollama", "qwen3:8b", { name: "Qwen 3 8B", publisher: "Qwen", family: "Qwen 3" });
+	const claude = model("anthropic", "claude-sonnet-5", { name: "Claude Sonnet 5" });
+	const vllm = model("vllm", "local-tool-model", { name: "Local Tool Model" });
 	const models = [
 		sol,
 		terra,
@@ -210,12 +213,15 @@ function selectorHarness(
 		model("google-antigravity", "gemini-3.1-pro-high-vertex", {
 			name: "Gemini 3.1 Pro High (Vertex, Antigravity)",
 		}),
+		...(options.ubuntuProviders ? [claude, vllm] : []),
 		ollama,
 	];
 	const states = new Map([
 		["openai-codex", state("openai-codex")],
 		["google-vertex", state("google-vertex", options.staleVertex ? "cached" : "ok", options.staleVertex ?? false)],
 		["google-antigravity", state("google-antigravity")],
+		["anthropic", state("anthropic")],
+		["vllm", state("vllm")],
 		["ollama", state("ollama")],
 	]);
 	const refreshProvider = vi.fn(options.refreshProvider ?? (async () => undefined));
@@ -229,7 +235,7 @@ function selectorHarness(
 		getProviderDiscoveryState: (provider: string) => states.get(provider),
 		getProviderAccessState: (provider: string) => ({
 			provider,
-			credentialSource: provider === "ollama" ? "keyless" : "stored-oauth",
+			credentialSource: provider === "ollama" || provider === "vllm" ? "keyless" : "stored-oauth",
 			status: provider === "google-vertex" && options.staleVertex ? "unreachable" : "connected",
 			catalogFreshness: provider === "google-vertex" && options.staleVertex ? "stale" : "fresh",
 			selectable: !(provider === "google-vertex" && options.staleVertex),
@@ -342,6 +348,33 @@ describe("provider-tab model selector", () => {
 		expect(rendered).toContain("Models:   Google Vertex");
 		expect(rendered).not.toContain("ChatGPT Subscription");
 		expect(rendered).not.toContain("Only showing models from configured providers");
+	});
+
+	it("renders the Ubuntu allowlist as four groups with only vLLM in Local Providers", async () => {
+		const { selector } = selectorHarness(undefined, {
+			ubuntuProviders: true,
+			providerAllowlist: ["anthropic", "openai-codex", "google-vertex", "vllm"],
+		});
+		await Bun.sleep(0);
+
+		let rendered = Bun.stripANSI(selector.render(180).join("\n"));
+		const header = rendered
+			.split("\n")
+			.find(line => line.startsWith("Models:"))
+			?.trim();
+		expect(header).toBe(
+			"Models:   ChatGPT Subscription    Anthropic / Claude    Google Vertex    Local Providers   (tab to cycle)",
+		);
+		expect(rendered).not.toContain("Only showing models from configured providers");
+
+		selector.handleInput("\t");
+		selector.handleInput("\t");
+		selector.handleInput("\t");
+		await Bun.sleep(0);
+		rendered = Bun.stripANSI(selector.render(180).join("\n"));
+		expect(rendered).toContain("Local Providers");
+		expect(rendered).toContain("[vllm/local-tool-model]");
+		expect(rendered).not.toContain("[ollama/");
 	});
 
 	it("searches globally, groups providers, and clearing restores the active provider", async () => {

@@ -186,14 +186,17 @@ export class OAuthSelectorComponent extends Container {
 		if (state === "invalid" || access?.status === "reauth-required") {
 			return theme.fg("error", ` ${theme.status.error} re-authentication required`) + excluded;
 		}
+		if (access?.status === "unreachable") {
+			return theme.fg("warning", ` ${theme.status.warning} unreachable`) + excluded;
+		}
+		if (access?.credentialSource === "keyless") {
+			return theme.fg("success", ` ${theme.status.success} keyless configured`) + excluded;
+		}
 		if (state === "valid") {
 			return theme.fg("success", ` ${theme.status.success} connected`) + excluded;
 		}
 		let label = "";
-		if (access?.credentialSource === "keyless")
-			label = theme.fg("success", ` ${theme.status.success} keyless configured`);
-		else if (access?.status === "unreachable") label = theme.fg("warning", ` ${theme.status.warning} unreachable`);
-		else if (access?.status === "configured-unverified") label = theme.fg("warning", " credential detected");
+		if (access?.status === "configured-unverified") label = theme.fg("warning", " credential detected");
 		else if (access?.status === "connected") label = theme.fg("success", ` ${theme.status.success} connected`);
 		else if (!access && this.#authStorage.hasAuth(providerId)) label = theme.fg("warning", " credential detected");
 		return label + excluded;

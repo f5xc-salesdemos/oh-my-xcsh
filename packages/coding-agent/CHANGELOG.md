@@ -48,6 +48,9 @@
 
 ### Fixed
 
+- Kept `/login` honest after live validation by reporting reachable keyless vLLM services as
+  `keyless configured` and unreachable keyless services as `unreachable`
+  ([#3783](https://github.com/f5-sales-demo/xcsh/issues/3783)).
 - Made the session picker, extension dashboard, and debug-log viewer fullscreen and mouse-aware while
   retaining their keyboard behavior, pinned chrome, and non-action row semantics
   ([#3748](https://github.com/f5-sales-demo/xcsh/issues/3748)).
