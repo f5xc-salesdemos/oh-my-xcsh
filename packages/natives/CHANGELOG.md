@@ -22,6 +22,8 @@
 
 ### Fixed
 
+- Made compiled-binary native extraction atomic and repaired truncated cached addons before loading
+  them ([#3775](https://github.com/f5-sales-demo/xcsh/issues/3775)).
 - Closed and reopened OSC 8 spans at every physical wrap boundary so links cannot bleed into table
   padding, borders, adjacent cells, or later rows. Semantically ported from
   [can1357/oh-my-pi#5887](https://github.com/can1357/oh-my-pi/pull/5887)
