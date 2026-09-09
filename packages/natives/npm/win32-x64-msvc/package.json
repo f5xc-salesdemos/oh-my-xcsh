@@ -1,6 +1,6 @@
 {
 	"name": "@f5-sales-demo/pi-natives-win32-x64-msvc",
-	"version": "21.19.4",
+	"version": "21.19.5",
 	"description": "Native addon for @f5-sales-demo/pi-natives (Windows x64)",
 	"homepage": "https://github.com/f5-sales-demo/xcsh",
 	"author": "Can Boluk",
