@@ -139,6 +139,13 @@ export declare class PtySession {
   write(data: string): void
   /** Resize the active PTY. */
   resize(cols: number, rows: number): void
+  /**
+   * Send SIGINT to the active PTY process group without force-killing it.
+   *
+   * On Windows, where Unix process-group signals are unavailable, this writes
+   * the terminal interrupt byte (ETX) to the PTY instead.
+   */
+  interrupt(): void
   /** Force-kill the active PTY command. */
   kill(): void
 }

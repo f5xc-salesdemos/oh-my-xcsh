@@ -350,6 +350,41 @@ describe("pi-natives", () => {
 	});
 
 	describe("pty", () => {
+		it("delivers a non-destructive interrupt to the PTY process group", async () => {
+			if (process.platform === "win32" || !Bun.which("bash")) {
+				return;
+			}
+
+			const session = new PtySession();
+			let output = "";
+			const ready = Promise.withResolvers<void>();
+			const finished = session.start(
+				{
+					command: "bash -c 'trap \"echo INTERRUPTED; exit 130\" INT; echo READY; while :; do sleep 1; done'",
+					cwd: testDir,
+					timeoutMs: 5000,
+					cols: 120,
+					rows: 40,
+				},
+				(_error, chunk) => {
+					output += chunk ?? "";
+					if (output.includes("READY")) ready.resolve();
+				},
+			);
+
+			try {
+				await ready.promise;
+				session.interrupt();
+				const result = await finished;
+				expect(output).toContain("INTERRUPTED");
+				expect(result.timedOut).toBe(false);
+			} finally {
+				try {
+					session.kill();
+				} catch {}
+			}
+		}, 10_000);
+
 		it("should time out detached background workloads without hanging", async () => {
 			if (process.platform === "win32" || !Bun.which("bash")) {
 				return;

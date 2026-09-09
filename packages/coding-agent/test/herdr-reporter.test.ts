@@ -7,6 +7,7 @@ import { TempDir } from "@f5-sales-demo/pi-utils";
 import type { ExtensionAPI, ExtensionContext } from "@f5-sales-demo/xcsh";
 import herdrReporter from "../src/extensibility/extensions/bundled/herdr-reporter";
 import { discoverAndLoadExtensions } from "../src/extensibility/extensions/loader";
+import { SessionManager } from "../src/session/session-manager";
 import { filterUserExtensions } from "./utils/filter-user-extensions";
 
 type AnyHandler = (event: unknown, ctx: unknown) => void | Promise<void>;
@@ -20,7 +21,7 @@ interface MockPi {
 	entries: Array<{ customType: string; data: unknown }>;
 }
 
-function makeMockPi(): MockPi {
+function makeMockPi(persistEntry?: (customType: string, data: unknown) => void): MockPi {
 	const handlers = new Map<string, AnyHandler>();
 	const execCalls: Array<{ command: string; args: string[] }> = [];
 	const labels: string[] = [];
@@ -36,6 +37,7 @@ function makeMockPi(): MockPi {
 		},
 		appendEntry(customType: string, data: unknown) {
 			entries.push({ customType, data });
+			persistEntry?.(customType, data);
 		},
 		exec(command: string, args: string[]) {
 			execCalls.push({ command, args });
@@ -120,7 +122,9 @@ function startFakeHerdr(options: FakeHerdrOptions = {}): Promise<FakeHerdr> {
 						);
 					} else if (options.failMethods?.has(request.method)) {
 						// Model a failed transport after the protocol handshake. The reporter
-						// must absorb it and keep later lifecycle reports flowing.
+						// must absorb it and keep later lifecycle reports flowing. Record the
+						// accepted request so replay tests can prove exact redelivery.
+						received.push({ ...request, order: order++ });
 						sock.destroy();
 					} else if (handshakeDone) {
 						received.push({ ...request, order: order++ });
@@ -468,6 +472,7 @@ describe("herdr-reporter extension", () => {
 	});
 
 	it("replays a persisted producer event after a real socket transport loss", async () => {
+		const tempDir = TempDir.createSync("@herdr-replay-");
 		const failedHerdr = await startFakeHerdr({
 			protocol: 20,
 			capabilities: { agent_turn_journal: true },
@@ -478,30 +483,36 @@ describe("herdr-reporter extension", () => {
 			process.env.HERDR_SOCKET_PATH = failedHerdr.socketPath;
 			process.env.HERDR_EXECUTION_ID = "execution-1";
 			process.env.HERDR_EXECUTION_GENERATION = "1";
-			const first = makeMockPi();
+			const firstSession = SessionManager.create(tempDir.path(), tempDir.path());
+			const first = makeMockPi((customType, data) => firstSession.appendCustomEntry(customType, data));
 			const ctx = {
 				isIdle: () => true,
-				sessionManager: {
-					getSessionId: () => "session-1",
-					getSessionFile: () => "/tmp/session-1.jsonl",
-					getEntries: () => first.entries.map(({ customType, data }) => ({ type: "custom", customType, data })),
-				},
+				sessionManager: firstSession,
 			} as unknown as ExtensionContext;
 			herdrReporter(first.pi);
 			await first.handlers.get("before_agent_start")?.({ type: "before_agent_start", prompt: "private" }, ctx);
 			await waitFor(() => first.entries.some(entry => (entry.data as { state?: string }).state === "starting"));
 			expect(first.entries.some(entry => (entry.data as { delivered?: boolean }).delivered === true)).toBe(false);
+			await firstSession.ensureOnDisk();
+			await firstSession.flush();
+			const persistedStart = firstSession
+				.getEntries()
+				.find(entry => entry.type === "custom" && entry.customType === "herdr.semantic-turn");
+			expect(persistedStart).toBeDefined();
+			const lostFrame = failedHerdr.received.find(frame => frame.method === "agent.turn.report");
+			expect(lostFrame).toBeDefined();
+			const sessionFile = firstSession.getSessionFile();
+			expect(sessionFile).toBeString();
+			await firstSession.close();
 
 			const recoveredHerdr = await startFakeHerdr({ protocol: 20, capabilities: { agent_turn_journal: true } });
 			try {
 				process.env.HERDR_SOCKET_PATH = recoveredHerdr.socketPath;
-				const second = makeMockPi();
+				const reopenedSession = await SessionManager.open(sessionFile!, tempDir.path());
+				const second = makeMockPi((customType, data) => reopenedSession.appendCustomEntry(customType, data));
 				const replayCtx = {
 					...ctx,
-					sessionManager: {
-						...(ctx as { sessionManager: object }).sessionManager,
-						getEntries: () => first.entries.map(({ customType, data }) => ({ type: "custom", customType, data })),
-					},
+					sessionManager: reopenedSession,
 				} as unknown as ExtensionContext;
 				herdrReporter(second.pi);
 				await second.handlers.get("session_start")?.({}, replayCtx);
@@ -511,15 +522,18 @@ describe("herdr-reporter extension", () => {
 				const events = recoveredHerdr.received
 					.filter(frame => frame.method === "agent.turn.report")
 					.map(frame => frame.params);
+				expect(JSON.stringify(events[0])).toBe(JSON.stringify(lostFrame?.params));
 				expect(events.map(event => [event.state, event.generation, event.event_revision])).toEqual([
 					["starting", 1, 1],
 					["interrupted", 1, 2],
 				]);
+				await reopenedSession.close();
 			} finally {
 				await recoveredHerdr.close();
 			}
 		} finally {
 			await failedHerdr.close();
+			tempDir.removeSync();
 		}
 	});
 

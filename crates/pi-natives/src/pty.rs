@@ -95,6 +95,7 @@ enum ReaderEvent {
 enum ControlMessage {
 	Input(String),
 	Resize { cols: u16, rows: u16 },
+	Interrupt,
 	Kill,
 }
 
@@ -105,6 +106,7 @@ const POST_EXIT_DRAIN_TIMEOUT: Duration = Duration::from_millis(300);
 const FINAL_READER_DRAIN_TIMEOUT: Duration = Duration::from_millis(50);
 const TERM_SIGNAL: i32 = 15;
 const KILL_SIGNAL: i32 = 9;
+const INTERRUPT_SIGNAL: i32 = 2;
 
 struct PtySessionCore {
 	control_tx: mpsc::Sender<ControlMessage>,
@@ -198,6 +200,15 @@ impl PtySession {
 			cols: cols.clamp(20, 400),
 			rows: rows.clamp(5, 200),
 		})
+	}
+
+	/// Send SIGINT to the active PTY process group without force-killing it.
+	///
+	/// On Windows, where Unix process-group signals are unavailable, this writes
+	/// the terminal interrupt byte (ETX) to the PTY instead.
+	#[napi]
+	pub fn interrupt(&self) -> Result<()> {
+		self.send_control(ControlMessage::Interrupt)
 	}
 
 	/// Force-kill the active PTY command.
@@ -459,6 +470,21 @@ fn run_pty_sync(
 				},
 				Ok(ControlMessage::Resize { cols, rows }) => {
 					let _ = master.resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 });
+				},
+				Ok(ControlMessage::Interrupt) => {
+					#[cfg(unix)]
+					{
+						if let Some(pgid) = process_group_id {
+							let _ = crate::ps::kill_process_group(pgid, INTERRUPT_SIGNAL);
+						} else if let Some(pid) = child_pid {
+							let _ = crate::ps::kill_tree(pid, INTERRUPT_SIGNAL);
+						}
+					}
+					#[cfg(not(unix))]
+					{
+						let _ = writer.write_all(&[3]);
+						let _ = writer.flush();
+					}
 				},
 				Ok(ControlMessage::Kill) => {
 					cancelled = true;

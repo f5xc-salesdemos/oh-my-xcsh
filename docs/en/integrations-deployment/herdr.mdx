@@ -35,6 +35,35 @@ The control/manager side owns translating `execution.cancel` to the child cancel
 
 Session shutdown releases pane authority. It does not convert an unfinished turn into a successful completion.
 
+### Producer-native acceptance driver
+
+`xcsh lifecycle --json` prints the version 1 machine-readable producer contract. To execute a source or installed
+producer check, supply a fresh absolute session directory, a normally configured model, and one scenario:
+
+```bash
+xcsh lifecycle --json \
+  --scenario await-continue \
+  --model openai-codex/gpt-5.6-luna \
+  --session-dir /absolute/fresh/xcsh-lifecycle-session
+```
+
+Supported scenarios are `success`, `failure`, `await-continue`, `cancel`, and `reply-loss-replay`. The driver first
+uses the prompt-free JSON session contract to persist one canonical 16-character lowercase hexadecimal session
+header, then reopens that exact path in an ordinary interactive XCSH child. It generates a random mode-0600 fixture
+for successful reads. `await-continue` pauses in the real `ExtensionUiController` input surface before the configured
+model runs; `cancel` sends SIGINT through `PtySession.interrupt()` and requires XCSH's native `cancelled` transition.
+
+The reply-loss scenario owns a temporary local protocol-20 socket that acknowledges ordinary reporter traffic but
+drops exactly one `agent.turn.report` reply. XCSH creates and persists the semantic event before transport, runs the
+configured provider and `read` tool, then a second XCSH process resumes the exact session path. The scenario passes
+only when the reporter redelivers the byte-equivalent execution, pane, session, turn, generation, event revision, and
+state fields. The socket never authors a lifecycle frame or substitutes an offline model.
+
+The receipt's `evidenceClass` is `source_native_child`. This proves the measured source or executable behavior only;
+the Control Manager remains responsible for its own admission, authenticated execution binding, generation changes,
+consumer receipts, and installed-artifact acceptance. The command does not install or release XCSH or Herdr and does
+not change normal launch defaults.
+
 The verified contract is:
 
 | Concern | XCSH signal | Herdr disposition |
